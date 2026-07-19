@@ -45,12 +45,6 @@ docker compose up --build
 
 Inventory data is stored at `data/reelkeeper.json` through the mounted volume.
 
-The Unraid icon URL is:
-
-```text
-https://raw.githubusercontent.com/Nick-116/ReelKeeper/main/public/ReelKeeper-logo.png
-```
-
 ## API highlights
 
 - `GET /api/parts`
