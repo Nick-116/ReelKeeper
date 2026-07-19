@@ -1,7 +1,7 @@
 # ReelKeeper
 
 <p align="center">
-  <img src="public/ReelKeeper-logo.png" alt="ReelKeeper circuit-board logo" width="180">
+  <img src="https://raw.githubusercontent.com/Nick-116/ReelKeeper/main/public/ReelKeeper-logo.png?v=2" alt="ReelKeeper circuit-board logo" width="180">
 </p>
 
 ReelKeeper is a self hosted inventory management software for PCB components. I have tons of different SMD and through hole components for my PCB projects, and they are difficult to keep track of, so I designed this.
