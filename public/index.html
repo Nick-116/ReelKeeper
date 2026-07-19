@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ReelKeeper</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 64 64" role="img">
+              <rect x="8" y="8" width="48" height="48" rx="8"></rect>
+              <path d="M20 18h8v8h-8zM36 18h8v8h-8zM20 38h8v8h-8zM36 38h8v8h-8z"></path>
+              <path d="M28 22h8M24 26v12M40 26v12M28 42h8M32 26v12M16 32h32M8 24H2M8 40H2M56 24h6M56 40h6M24 8V2M40 8V2M24 56v6M40 56v6"></path>
+            </svg>
+          </div>
+          <div>
+            <h1>ReelKeeper</h1>
+            <span>SMD inventory control</span>
+          </div>
+        </div>
+        <nav class="tabs" aria-label="Main sections">
+          <button class="tab active" data-view="components" data-route="/components"><span class="nav-icon resistor-icon"></span>Components</button>
+          <button class="tab" data-view="bom" data-route="/bom"><span class="nav-icon sheet-icon"></span>BOM Check</button>
+          <button class="tab" data-view="orders" data-route="/add-inventory"><span class="nav-icon plus-icon"></span>Add Inventory</button>
+          <button class="tab" data-view="settings" data-route="/settings"><span class="nav-icon settings-icon"></span>Settings</button>
+        </nav>
+        <div class="status-panel">
+          <div>
+            <strong id="componentTypes">0</strong>
+            <span>component types</span>
+          </div>
+          <div>
+            <strong id="totalParts">0</strong>
+            <span>total parts</span>
+          </div>
+        </div>
+      </aside>
+
+      <main>
+        <section class="view active" id="components">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Component library</p>
+              <h2>Components</h2>
+            </div>
+            <button class="primary" id="newPartBtn">Add part</button>
+          </header>
+
+          <div class="toolbar">
+            <label class="search">
+              <span>Search</span>
+              <input id="searchInput" type="search" placeholder="LCSC, MPN, value, or package">
+            </label>
+            <button id="clearSearchBtn">Reset search</button>
+            <label>
+              <span>Category</span>
+              <select id="categoryFilter"></select>
+            </label>
+          </div>
+          <div class="advanced-filters" id="advancedFilters"></div>
+
+          <div class="components-list" id="partsGrid"></div>
+        </section>
+
+        <section class="view" id="bom">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Assembly planning</p>
+              <h2>BOM Check</h2>
+            </div>
+          </header>
+          <div class="center-stage">
+          <div class="panel upload-panel action-tile bom-upload-tile">
+            <div>
+              <h3>Upload BOM XLSX</h3>
+              <p class="hint">Use the workbook your PCB software exports. ReelKeeper reads Quantity, Designator, Footprint, Value, Manufacturer Part, and Supplier Part columns.</p>
+            </div>
+            <label class="file-picker">
+              <span>BOM file</span>
+              <input id="bomFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+            </label>
+            <button class="primary" id="checkBomBtn">Check uploaded BOM</button>
+          </div>
+          </div>
+          <div class="bom-layout hidden" id="bomResultsSection">
+            <div class="panel">
+              <h3>What you have</h3>
+              <div id="bomSummary" class="summary-strip"></div>
+              <div id="bomHaveResults" class="results-list"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-title-row">
+                <h3>What to order</h3>
+                <button id="exportBomOrderBtn">Export order CSV</button>
+              </div>
+              <div id="bomOrderResults" class="results-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="orders">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Stock receiving</p>
+              <h2>Add Inventory</h2>
+            </div>
+          </header>
+          <div class="add-inventory-grid center-stage">
+            <div class="panel upload-panel compact-upload action-tile">
+              <div>
+                <h3>Manual Component</h3>
+                <p class="hint">Add a single component directly without uploading a CSV or spreadsheet.</p>
+              </div>
+              <button id="manualAddComponentBtn"><span class="button-icon plus-icon"></span>Add component manually</button>
+            </div>
+            <div class="panel upload-panel compact-upload action-tile">
+              <div>
+                <h3>Upload LCSC Order CSV</h3>
+                <p class="hint">Choose the order export CSV from LCSC. ReelKeeper shows a review step before importing.</p>
+              </div>
+              <label class="file-picker">
+                <span>LCSC order CSV</span>
+                <input id="orderFile" type="file" accept=".csv,text/csv">
+              </label>
+            </div>
+            <div class="panel upload-panel compact-upload action-tile">
+              <div>
+                <h3>Inventory Template</h3>
+                <p class="hint">Export a CSV template, fill it in, then import it to add stock manually.</p>
+              </div>
+              <div class="template-actions">
+                <button id="exportTemplateBtn">Export template</button>
+                <label class="file-picker">
+                  <span>Import template CSV</span>
+                  <input id="templateFile" type="file" accept=".csv,text/csv">
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="settings">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Integration</p>
+              <h2>Settings & API Docs</h2>
+            </div>
+          </header>
+          <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+            <button class="settings-tab active" data-settings-panel="general">General</button>
+            <button class="settings-tab" data-settings-panel="api">API</button>
+            <button class="settings-tab" data-settings-panel="history">Order Import History</button>
+            <button class="settings-tab" data-settings-panel="audit">Audit Log</button>
+          </div>
+          <div class="settings-panel active" id="settings-general">
+            <div class="panel">
+              <h3>General</h3>
+              <p class="hint">ReelKeeper stores components, import batches, and movement history in the Docker volume at <code>data/reelkeeper.json</code>.</p>
+            </div>
+            <div class="panel">
+              <h3>Part matching</h3>
+              <p class="hint">ReelKeeper matches imported rows by LCSC part number first, then manufacturer part number, then compatible passive specs where safe.</p>
+            </div>
+            <div class="panel danger-zone">
+              <div>
+                <h3>Reset ReelKeeper</h3>
+                <p class="hint">Remove all components, stock movements, and order import history and return the software to its original empty state.</p>
+              </div>
+              <button class="danger" id="resetSoftwareBtn">Reset to defaults</button>
+            </div>
+          </div>
+          <div class="settings-panel" id="settings-api">
+            <div class="settings-grid">
+              <div class="panel">
+                <h3>Use component</h3>
+                <p class="hint">Tell ReelKeeper which component was used and how many. Identify it with an LCSC part number, MPN, or internal component id.</p>
+                <pre><code>curl -X POST http://localhost:3000/api/use \
+  -H "Content-Type: application/json" \
+  -d '{"lcsc":"C25804","quantity":1}'</code></pre>
+              </div>
+              <div class="panel">
+                <h3>Order import API</h3>
+                <pre><code>POST /api/import/order
+{
+  "rows": [
+    {
+      "lcsc": "C25804",
+      "mpn": "0603WAF1002T5E",
+      "name": "10k resistor",
+      "quantity": 1000,
+      "category": "Resistors",
+      "package": "0603"
+    }
+  ]
+}</code></pre>
+              </div>
+              <div class="panel">
+                <h3>BOM check API</h3>
+                <pre><code>POST /api/bom/check
+{
+  "rows": [
+    { "designator": "R1 R2", "lcsc": "C25804", "quantity": 2 }
+  ]
+}</code></pre>
+              </div>
+              <div class="panel">
+                <h3>API Reference</h3>
+                <button id="refreshDocsBtn">Refresh docs</button>
+                <pre id="apiDocs"><code>Loading...</code></pre>
+              </div>
+            </div>
+          </div>
+          <div class="settings-panel" id="settings-history">
+            <div class="panel">
+              <h3>Order Import History</h3>
+              <p class="hint">Undo an imported LCSC order if you cancel it after adding it to ReelKeeper.</p>
+              <div id="importHistory" class="results-list"></div>
+            </div>
+          </div>
+          <div class="settings-panel" id="settings-audit">
+            <div class="panel">
+              <h3>Audit Log</h3>
+              <p class="hint">Inventory changes, imports, saved BOM matches, and pick-and-place usage are recorded here.</p>
+              <div id="auditLog" class="audit-list"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="partDialog">
+      <form method="dialog" id="partForm">
+        <header>
+          <h3 id="dialogTitle">Add part</h3>
+          <button type="button" class="icon-button" id="closeDialogBtn" aria-label="Close">x</button>
+        </header>
+        <input type="hidden" id="partId">
+        <div class="form-grid">
+          <label>Name<input id="partName" required></label>
+          <label>Category<input id="partCategory" list="categoryOptions"></label>
+          <label>Manufacturer<input id="partManufacturer"></label>
+          <label>MPN<input id="partMpn"></label>
+          <label>LCSC Part Number<input id="partLcsc" placeholder="C25804"></label>
+          <label>Package<input id="partPackage" placeholder="0603"></label>
+          <label>Value<input id="partValue" placeholder="10k"></label>
+          <label>Quantity<input id="partQuantity" type="number" min="0" step="1"></label>
+          <label>Packaging
+            <select id="partStorageType">
+              <option value="machine-ready">Machine-ready packaging</option>
+              <option value="loose">Loose stock</option>
+            </select>
+          </label>
+          <label class="wide">Photo URL<input id="partPhotoUrl"></label>
+        </div>
+        <footer>
+          <button type="button" class="danger" id="deletePartBtn">Delete</button>
+          <span></span>
+          <button type="button" id="cancelDialogBtn">Cancel</button>
+          <button class="primary" id="savePartBtn">Save</button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="importPreviewDialog">
+      <form method="dialog" id="importPreviewForm">
+        <header>
+          <h3>Review import</h3>
+          <button type="button" class="icon-button" id="closeImportPreviewBtn" aria-label="Close">x</button>
+        </header>
+        <div class="import-preview-summary" id="importPreviewSummary"></div>
+        <fieldset class="packaging-choice">
+          <legend>Default packaging status for this order</legend>
+          <label>
+            <input type="radio" name="importStorageType" value="machine-ready" checked>
+            <span>Machine-ready packaging</span>
+            <small>Reel, cut tape, tray, or other packaging that is practical for pick-and-place.</small>
+          </label>
+          <label>
+            <input type="radio" name="importStorageType" value="loose">
+            <span>Loose stock</span>
+            <small>Bagged or unpackaged parts that are harder to feed into the pick-and-place machine.</small>
+          </label>
+        </fieldset>
+        <div class="import-preview-list" id="importPreviewList"></div>
+        <footer>
+          <span></span>
+          <button type="button" id="cancelImportPreviewBtn">Cancel</button>
+          <button class="primary" id="confirmImportBtn">Import parts</button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="bomMatchDialog">
+      <div class="bom-match-dialog-content">
+        <header>
+          <div>
+            <h3>Match inventory component</h3>
+            <span class="meta" id="bomMatchRequestLabel"></span>
+          </div>
+          <button type="button" class="icon-button" id="closeBomMatchDialogBtn" aria-label="Close">x</button>
+        </header>
+        <label class="bom-match-search">
+          <span>Search components</span>
+          <input id="bomMatchSearchInput" type="search" placeholder="Name, LCSC, MPN, value, or package" autocomplete="off">
+        </label>
+        <div class="bom-match-results" id="bomMatchResults"></div>
+      </div>
+    </dialog>
+    <div class="loading-overlay hidden" id="importLoadingOverlay" role="status" aria-live="polite" aria-label="Adding components">
+      <div class="loading-content">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <strong>Adding components</strong>
+        <span>Looking up part details and photos from LCSC...</span>
+      </div>
+    </div>
+    <datalist id="categoryOptions"></datalist>
+    <script src="/app.js"></script>
+  </body>
+</html>
