@@ -602,7 +602,16 @@ function fileToBase64(file) {
 
 function previewRows(rows, fileName, source) {
   const validRows = rows.filter((row) => Number(row.quantity || 0) > 0)
-    .map((row) => ({ ...row, storageType: row.storageType || "machine-ready" }));
+    .map((row) => {
+      const quantity = Number(row.quantity || 0);
+      const storageType = row.storageType === "loose" ? "loose" : "machine-ready";
+      return {
+        ...row,
+        storageType,
+        machineReadyQuantity: storageType === "loose" ? 0 : quantity,
+        looseQuantity: storageType === "loose" ? quantity : 0
+      };
+    });
   state.pendingImport = { rows: validRows, fileName, source };
 
   $("#importPreviewSummary").innerHTML = `
@@ -618,7 +627,18 @@ function previewRows(rows, fileName, source) {
         <select data-preview-storage="${validRows.indexOf(row)}">
           <option value="machine-ready" ${row.storageType !== "loose" ? "selected" : ""}>Machine-ready</option>
           <option value="loose" ${row.storageType === "loose" ? "selected" : ""}>Loose stock</option>
+          <option value="split" ${Number(row.quantity) < 2 ? "disabled" : ""}>Split stock</option>
         </select>
+        <div class="preview-split hidden" data-preview-split-panel="${validRows.indexOf(row)}">
+          <label>
+            <span>Machine-ready</span>
+            <input type="number" min="0" max="${Number(row.quantity)}" step="1" value="${Number(row.machineReadyQuantity)}" data-preview-split-qty="${validRows.indexOf(row)}" data-split-kind="machineReadyQuantity">
+          </label>
+          <label>
+            <span>Loose</span>
+            <input type="number" min="0" max="${Number(row.quantity)}" step="1" value="${Number(row.looseQuantity)}" data-preview-split-qty="${validRows.indexOf(row)}" data-split-kind="looseQuantity">
+          </label>
+        </div>
       </label>
       <span class="preview-qty">+${Number(row.quantity || 0).toLocaleString()}</span>
     </div>
@@ -630,15 +650,53 @@ function previewRows(rows, fileName, source) {
 
 function applyImportDefaultPackaging(storageType) {
   if (!state.pendingImport) return;
-  state.pendingImport.rows = state.pendingImport.rows.map((row) => ({ ...row, storageType }));
-  $$("[data-preview-storage]").forEach((select) => {
+  state.pendingImport.rows = state.pendingImport.rows.map((row) => {
+    const quantity = Number(row.quantity || 0);
+    return {
+      ...row,
+      storageType,
+      machineReadyQuantity: storageType === "loose" ? 0 : quantity,
+      looseQuantity: storageType === "loose" ? quantity : 0
+    };
+  });
+  $$("[data-preview-storage]").forEach((select, index) => {
     select.value = storageType;
+    updatePreviewSplitUi(index);
   });
 }
 
 function setPreviewRowPackaging(index, storageType) {
-  if (!state.pendingImport?.rows[index]) return;
-  state.pendingImport.rows[index] = { ...state.pendingImport.rows[index], storageType };
+  const row = state.pendingImport?.rows[index];
+  if (!row) return;
+  const quantity = Number(row.quantity || 0);
+  let machineReadyQuantity = storageType === "loose" ? 0 : quantity;
+  let looseQuantity = storageType === "loose" ? quantity : 0;
+  if (storageType === "split") {
+    looseQuantity = Math.floor(quantity / 2);
+    machineReadyQuantity = quantity - looseQuantity;
+  }
+  state.pendingImport.rows[index] = { ...row, storageType, machineReadyQuantity, looseQuantity };
+  updatePreviewSplitUi(index);
+}
+
+function updatePreviewSplitUi(index) {
+  const row = state.pendingImport?.rows[index];
+  if (!row) return;
+  const panel = $(`[data-preview-split-panel="${index}"]`);
+  panel?.classList.toggle("hidden", row.storageType !== "split");
+  $$( `[data-preview-split-qty="${index}"]`).forEach((input) => {
+    input.value = Number(row[input.dataset.splitKind] || 0);
+  });
+}
+
+function setPreviewSplitQuantity(index, kind, rawValue) {
+  const row = state.pendingImport?.rows[index];
+  if (!row) return;
+  const total = Number(row.quantity || 0);
+  const value = Math.min(total, Math.max(0, Math.round(Number(rawValue) || 0)));
+  const otherKind = kind === "looseQuantity" ? "machineReadyQuantity" : "looseQuantity";
+  state.pendingImport.rows[index] = { ...row, [kind]: value, [otherKind]: total - value };
+  updatePreviewSplitUi(index);
 }
 
 async function importOrder() {
@@ -664,7 +722,18 @@ async function confirmImport(event) {
   event.preventDefault();
   if (!state.pendingImport) return;
   const storageType = document.querySelector('input[name="importStorageType"]:checked')?.value || "machine-ready";
-  const rows = state.pendingImport.rows.map((row) => ({ ...row, storageType: row.storageType || storageType }));
+  const invalidSplit = state.pendingImport.rows.find((row) => row.storageType === "split" && (!row.machineReadyQuantity || !row.looseQuantity));
+  if (invalidSplit) {
+    window.alert("Split stock must have at least one component in both machine-ready and loose stock.");
+    return;
+  }
+  const rows = state.pendingImport.rows.flatMap((row) => {
+    if (row.storageType !== "split") return [{ ...row, storageType: row.storageType || storageType }];
+    return [
+      { ...row, quantity: row.machineReadyQuantity, storageType: "machine-ready" },
+      { ...row, quantity: row.looseQuantity, storageType: "loose" }
+    ];
+  });
   const pendingImport = state.pendingImport;
   const confirmButton = $("#confirmImportBtn");
   confirmButton.disabled = true;
@@ -865,8 +934,16 @@ function bindEvents() {
   });
   $("#importPreviewList").addEventListener("change", (event) => {
     const select = event.target.closest("[data-preview-storage]");
-    if (!select) return;
-    setPreviewRowPackaging(Number(select.dataset.previewStorage), select.value);
+    if (select) {
+      setPreviewRowPackaging(Number(select.dataset.previewStorage), select.value);
+      return;
+    }
+    const splitInput = event.target.closest("[data-preview-split-qty]");
+    if (splitInput) setPreviewSplitQuantity(Number(splitInput.dataset.previewSplitQty), splitInput.dataset.splitKind, splitInput.value);
+  });
+  $("#importPreviewList").addEventListener("input", (event) => {
+    const splitInput = event.target.closest("[data-preview-split-qty]");
+    if (splitInput) setPreviewSplitQuantity(Number(splitInput.dataset.previewSplitQty), splitInput.dataset.splitKind, splitInput.value);
   });
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);

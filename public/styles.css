@@ -1030,6 +1030,22 @@ dialog h3 {
   padding: 0.45rem 0.55rem;
 }
 
+.preview-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+.preview-split label {
+  gap: 0.2rem;
+  font-size: 0.7rem;
+}
+
+.preview-split input {
+  padding: 0.4rem 0.45rem;
+}
+
 .preview-qty {
   grid-row: 1 / span 2;
   grid-column: 3;
@@ -1077,6 +1093,20 @@ dialog h3 {
   .bom-match-result {
     grid-template-columns: 1fr;
     gap: 0.2rem;
+  }
+
+  .preview-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .preview-storage {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .preview-qty {
+    grid-column: 2;
+    grid-row: 1 / span 2;
   }
 
   .tabs {
