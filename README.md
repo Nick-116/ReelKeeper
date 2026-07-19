@@ -1,6 +1,12 @@
 # ReelKeeper
 
-ReelKeeper is a self-hosted SMD inventory tracker for component reels, cut tape, trays, and loose parts. It can import LCSC order CSVs, classify parts automatically, upload PCB software BOM `.xlsx` files, compare compatible parts against your stock, and expose an API for pick-and-place machines to decrement stock as parts are placed.
+ReelKeeper is a self hosted inventory management software for PCB components. I have tons of different SMD and through hole components for my PCB projects, and they are difficult to keep track of, so I designed this.
+
+## Features
+
+- Bulk uploads of components from a .csv file, or using the .xlsx from LCSC. I get all my parts from them so using the LCSC feature will pull photos of the parts and some other cool info.
+- BOM checking: References your library to a bill of materials for a current project. It will do its best to match components that fit the bill, not specific to brands. For example it will choose any capacitor that is over 12v, is 0805, etc..
+- Full API: I added this so I could have my pick and place automatically adjust my database every time it places a component. If you are interested in the scripts for that send me a message! It is all documented in the settings>API page.
 
 ## Run locally
 
