@@ -1,5 +1,9 @@
 # ReelKeeper
 
+<p align="center">
+  <img src="public/ReelKeeper-logo.png" alt="ReelKeeper circuit-board logo" width="180">
+</p>
+
 ReelKeeper is a self hosted inventory management software for PCB components. I have tons of different SMD and through hole components for my PCB projects, and they are difficult to keep track of, so I designed this.
 
 ## Features
@@ -7,6 +11,20 @@ ReelKeeper is a self hosted inventory management software for PCB components. I 
 - Bulk uploads of components from a .csv file, or using the .xlsx from LCSC. I get all my parts from them so using the LCSC feature will pull photos of the parts and some other cool info.
 - BOM checking: References your library to a bill of materials for a current project. It will do its best to match components that fit the bill, not specific to brands. For example it will choose any capacitor that is over 12v, is 0805, etc..
 - Full API: I added this so I could have my pick and place automatically adjust my database every time it places a component. If you are interested in the scripts for that send me a message! It is all documented in the settings>API page.
+
+## Screenshots
+
+### Component library
+
+![ReelKeeper component library](docs/images/components.png)
+
+### BOM checking
+
+![ReelKeeper BOM checker](docs/images/bom-check.png)
+
+### Adding inventory
+
+![ReelKeeper inventory import options](docs/images/add-inventory.png)
 
 ## Run locally
 
