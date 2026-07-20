@@ -731,6 +731,50 @@ img.component-thumb:hover {
   font-size: 1.25rem;
 }
 
+.bom-cost-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+  padding: 0.8rem;
+  border: 1px solid #9ecfc2;
+  border-radius: 8px;
+  background: #edf8f5;
+}
+
+.bom-cost-summary div { display: grid; gap: 0.2rem; }
+.bom-cost-summary strong { font-size: 1.35rem; }
+.bom-cost-summary > span,
+.pricing-status { color: var(--muted); font-size: 0.88rem; }
+
+.pricing-settings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pricing-settings .hint,
+.pricing-status { margin-bottom: 0; }
+
+#updatePricingBtn.is-loading::before {
+  content: "";
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-right: 0.45rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -0.12rem;
+  animation: pricing-spin 0.75s linear infinite;
+}
+
+@keyframes pricing-spin { to { transform: rotate(360deg); } }
+
+.price-pill { color: #245f50; }
+
 .results-list {
   display: grid;
   gap: 0.55rem;
@@ -1170,5 +1214,11 @@ dialog h3 {
     grid-column: 1;
     grid-row: auto;
     justify-self: start;
+  }
+
+  .bom-cost-summary,
+  .pricing-settings {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

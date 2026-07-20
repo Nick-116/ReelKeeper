@@ -327,6 +327,7 @@ function renderParts() {
             ${part.package ? `<span class="pill">${escapeHtml(part.package)}</span>` : ""}
             ${part.value ? `<span class="pill">${escapeHtml(part.value)}</span>` : ""}
             ${part.storageType === "loose" ? `<span class="pill loose-pill">Loose stock</span>` : ""}
+            ${part.priceBreaks?.length ? `<span class="pill price-pill">From $${Number(part.priceBreaks.at(-1).unitPrice).toFixed(4)}</span>` : ""}
           </div>
         </div>
         <div class="component-detail">
@@ -411,6 +412,7 @@ async function deletePart() {
 function renderBomResults(data) {
   state.currentBom = data;
   data.summary = {
+    ...(data.summary || {}),
     total: data.lines.length,
     ready: data.lines.filter((line) => line.status === "ready").length,
     short: data.lines.filter((line) => line.status === "short").length,
@@ -423,6 +425,12 @@ function renderBomResults(data) {
       <span>${key}</span>
     </div>
   `).join("");
+  const cost = Number(data.summary.estimatedCostPerBoard || 0);
+  const unpriced = Number(data.summary.unpricedLines || 0);
+  $("#bomCostSummary").innerHTML = `
+    <div><span>Estimated component cost per board</span><strong>${cost.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 })}</strong></div>
+    <span>${unpriced ? `${unpriced} BOM line${unpriced === 1 ? " is" : "s are"} not included because pricing is unavailable.` : "All BOM lines include saved pricing."}</span>
+  `;
 
   const stocked = data.lines.filter((line) => line.status === "ready");
   const order = data.lines.filter((line) => line.status !== "ready");
@@ -442,6 +450,7 @@ function renderBomResults(data) {
         ${categoryBadge(requested.category || line.requestedSpecs?.category)}
         <strong>${escapeHtml(title)} · ${escapeHtml(line.status.toUpperCase())}</strong>
         <span class="meta">Need ${line.required.toLocaleString()} · Have ${line.available.toLocaleString()}</span>
+        <span class="meta">${line.estimatedCost !== null ? formatBomLineCost(line) : "Price unavailable"}</span>
         ${line.manuallyCovered ? `<span class="manual-covered-label">Marked as covered for this BOM only</span>` : ""}
         ${line.savedMatch ? `<span class="saved-match-label">Using saved inventory match</span>` : ""}
         ${matchList}
@@ -465,6 +474,7 @@ function renderBomResults(data) {
         ${categoryBadge(requested.category || line.requestedSpecs?.category)}
         <strong>${escapeHtml(title)} · ORDER ${line.shortage.toLocaleString()}</strong>
         <span class="meta">Need ${line.required.toLocaleString()} · Have ${line.available.toLocaleString()} · Short ${line.shortage.toLocaleString()}</span>
+        <span class="meta">${line.estimatedCost !== null ? formatBomLineCost(line) : "Price unavailable"}</span>
         <span>${escapeHtml(cleanDisplayText(spec) || "No parsed specification")}</span>
         ${partial ? `<span class="meta">Partial compatible stock: ${escapeHtml(partial)}</span>` : ""}
         <div class="bom-correction-actions">
@@ -474,6 +484,12 @@ function renderBomResults(data) {
       </div>
     `;
   }).join("") || `<p class="hint">Everything in the uploaded BOM is covered by stock.</p>`;
+}
+
+function formatBomLineCost(line) {
+  const unit = Number(line.unitPrice).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  const total = Number(line.estimatedCost).toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  return `${total} per board · ${unit} each`;
 }
 
 function markBomLineCovered(lineIndex) {
@@ -564,6 +580,7 @@ function resetBomChecker() {
   $("#bomFile").value = "";
   $("#bomResultsSection").classList.add("hidden");
   $("#bomSummary").innerHTML = "";
+  $("#bomCostSummary").innerHTML = "";
   $("#bomHaveResults").innerHTML = "";
   $("#bomOrderResults").innerHTML = "";
   if ($("#bomMatchDialog").open) $("#bomMatchDialog").close();
@@ -589,6 +606,26 @@ async function checkBom() {
     body: JSON.stringify({ fileName: file.name, fileBase64 })
   });
   renderBomResults(data);
+}
+
+async function updateLcscPricing() {
+  const button = $("#updatePricingBtn");
+  const status = $("#pricingStatus");
+  button.disabled = true;
+  button.classList.add("is-loading");
+  status.textContent = "Updating prices from LCSC...";
+  try {
+    const result = await api("/api/pricing/lcsc/update", { method: "POST" });
+    status.textContent = result.total
+      ? `Updated ${result.updated} of ${result.total} LCSC part numbers${result.failed ? `; ${result.failed} failed` : ""}.`
+      : "No components have an LCSC part number yet.";
+    await loadParts();
+  } catch (error) {
+    status.textContent = `Pricing update failed: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.classList.remove("is-loading");
+  }
 }
 
 function fileToBase64(file) {
@@ -947,6 +984,7 @@ function bindEvents() {
   });
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);
+  $("#updatePricingBtn")?.addEventListener("click", updateLcscPricing);
   $$(".settings-tab").forEach((button) => {
     button.addEventListener("click", () => activateSettingsPanel(button.dataset.settingsPanel));
   });

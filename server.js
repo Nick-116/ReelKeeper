@@ -6,7 +6,7 @@ const yauzl = require("yauzl");
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const dataFile = process.env.DATA_FILE || path.join(__dirname, "data", "reelkeeper.json");
-const lcscPhotoCache = new Map();
+const lcscDetailsCache = new Map();
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -52,6 +52,7 @@ function normalizePart(input, existing = {}) {
     return Number.isFinite(parsed) ? parsed : fallback;
   };
 
+  const priceBreaks = Array.isArray(input.priceBreaks) ? input.priceBreaks : (existing.priceBreaks || []);
   const base = {
     ...existing,
     id: existing.id || input.id || `part_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -68,6 +69,12 @@ function normalizePart(input, existing = {}) {
     minimum: Math.max(0, number(input.minimum, existing.minimum || 0)),
     location: text(input.location) || existing.location || "",
     photoUrl: text(input.photoUrl) || existing.photoUrl || "",
+    priceBreaks: priceBreaks
+      .map((item) => ({ quantity: Math.max(1, number(item.quantity || item.ladder, 1)), unitPrice: number(item.unitPrice ?? item.usdPrice) }))
+      .filter((item) => item.unitPrice > 0)
+      .sort((a, b) => a.quantity - b.quantity),
+    priceCurrency: priceBreaks.length ? "USD" : (existing.priceCurrency || ""),
+    priceUpdatedAt: text(input.priceUpdatedAt) || existing.priceUpdatedAt || "",
     notes: text(input.notes) || existing.notes || "",
     createdAt: existing.createdAt || now(),
     updatedAt: now()
@@ -261,6 +268,12 @@ function bomLine(store, row) {
     : compatibleParts(store.parts, row);
   const available = matches.reduce((sum, item) => sum + item.part.quantity, 0);
   const stockedMatches = matches.filter((item) => item.part.quantity > 0);
+  const pricedPart = stockedMatches.find((item) => item.part.priceBreaks?.length)?.part ||
+    matches.find((item) => item.part.priceBreaks?.length)?.part ||
+    store.parts.find((part) => part.lcsc && part.lcsc.toLowerCase() === String(row.lcsc || "").toLowerCase() && part.priceBreaks?.length) || null;
+  const breaks = pricedPart?.priceBreaks || [];
+  const priceBreak = breaks.filter((item) => item.quantity <= required).at(-1) || breaks[0] || null;
+  const unitPrice = priceBreak ? Number(priceBreak.unitPrice) : null;
   return {
     requestKey,
     requested: row,
@@ -275,7 +288,24 @@ function bomLine(store, row) {
     available,
     shortage: Math.max(0, required - available),
     status: available >= required ? "ready" : matches.length ? "short" : "missing",
-    savedMatch: Boolean(forcedPart)
+    savedMatch: Boolean(forcedPart),
+    unitPrice,
+    estimatedCost: unitPrice === null ? null : unitPrice * required,
+    priceQuantityBreak: priceBreak?.quantity || null,
+    priceUpdatedAt: pricedPart?.priceUpdatedAt || null
+  };
+}
+
+function bomSummary(lines) {
+  const priced = lines.filter((line) => line.estimatedCost !== null);
+  return {
+    total: lines.length,
+    ready: lines.filter((line) => line.status === "ready").length,
+    short: lines.filter((line) => line.status === "short").length,
+    missing: lines.filter((line) => line.status === "missing").length,
+    estimatedCostPerBoard: priced.reduce((sum, line) => sum + line.estimatedCost, 0),
+    pricedLines: priced.length,
+    unpricedLines: lines.length - priced.length
   };
 }
 
@@ -406,10 +436,24 @@ function recordMovement(store, movement) {
   store.movements = store.movements.slice(0, 500);
 }
 
-async function lookupLcscPhoto(lcsc) {
+function extractLcscPriceBreaks(html) {
+  const match = html.match(/"productPriceList":(\[\{.*?\}\])/s);
+  if (!match) return [];
+  try {
+    return JSON.parse(match[1]).map((item) => ({
+      quantity: Number(item.ladder),
+      unitPrice: Number(item.usdPrice ?? item.currencyPrice ?? item.productPrice)
+    })).filter((item) => Number.isFinite(item.quantity) && item.quantity > 0 && Number.isFinite(item.unitPrice) && item.unitPrice > 0)
+      .sort((a, b) => a.quantity - b.quantity);
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function lookupLcscDetails(lcsc, refresh = false) {
   const partNumber = String(lcsc || "").trim().toUpperCase();
-  if (!/^C\d+$/i.test(partNumber)) return "";
-  if (lcscPhotoCache.has(partNumber)) return lcscPhotoCache.get(partNumber);
+  if (!/^C\d+$/i.test(partNumber)) return { photoUrl: "", priceBreaks: [] };
+  if (!refresh && lcscDetailsCache.has(partNumber)) return lcscDetailsCache.get(partNumber);
 
   try {
     const response = await fetch(`https://www.lcsc.com/product-detail/${encodeURIComponent(partNumber)}.html`, {
@@ -422,11 +466,12 @@ async function lookupLcscPhoto(lcsc) {
     const images = [...html.matchAll(/https?:\/\/assets\.lcsc\.com\/images\/lcsc\/[^"'<>\\]+?\.(?:jpg|jpeg|png|webp)/gi)]
       .map((match) => match[0].replace(/\\u002F/g, "/"));
     const image = images.find((url) => /_front\./i.test(url)) || images.find((url) => !/logo|blank/i.test(url)) || "";
-    lcscPhotoCache.set(partNumber, image);
-    return image;
-  } catch (_error) {
-    lcscPhotoCache.set(partNumber, "");
-    return "";
+    const details = { photoUrl: image, priceBreaks: extractLcscPriceBreaks(html) };
+    lcscDetailsCache.set(partNumber, details);
+    return details;
+  } catch (error) {
+    if (!refresh) lcscDetailsCache.set(partNumber, { photoUrl: "", priceBreaks: [] });
+    throw error;
   }
 }
 
@@ -503,8 +548,33 @@ app.delete("/api/parts/:id", (req, res) => {
 
 app.post("/api/reset", (_req, res) => {
   writeStore(seedData());
-  lcscPhotoCache.clear();
+  lcscDetailsCache.clear();
   res.json({ ok: true });
+});
+
+app.post("/api/pricing/lcsc/update", async (_req, res) => {
+  const store = readStore();
+  const partNumbers = [...new Set(store.parts.map((part) => String(part.lcsc || "").trim().toUpperCase()).filter((value) => /^C\d+$/.test(value)))];
+  const results = [];
+  for (const lcsc of partNumbers) {
+    try {
+      const details = await lookupLcscDetails(lcsc, true);
+      if (!details.priceBreaks.length) throw new Error("No USD pricing found");
+      const updatedAt = now();
+      store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc).forEach((part) => {
+        part.priceBreaks = details.priceBreaks;
+        part.priceCurrency = "USD";
+        part.priceUpdatedAt = updatedAt;
+        if (!part.photoUrl && details.photoUrl) part.photoUrl = details.photoUrl;
+        part.updatedAt = updatedAt;
+      });
+      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length });
+    } catch (error) {
+      results.push({ lcsc, ok: false, error: error.message || "Pricing lookup failed" });
+    }
+  }
+  writeStore(store);
+  res.json({ total: partNumbers.length, updated: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, results });
 });
 
 app.post("/api/import/order", async (req, res) => {
@@ -526,8 +596,17 @@ app.post("/api/import/order", async (req, res) => {
     const quantity = Number(row.quantity || row.qty || row.orderQuantity || 0);
     if (!Number.isFinite(quantity) || quantity <= 0) continue;
     row.storageType = normalizeStorageType(row.storageType || batch.storageType);
-    if (!row.photoUrl && row.lcsc) {
-      row.photoUrl = await lookupLcscPhoto(row.lcsc);
+    if (row.lcsc) {
+      try {
+        const details = await lookupLcscDetails(row.lcsc);
+        if (!row.photoUrl) row.photoUrl = details.photoUrl;
+        if (details.priceBreaks.length) {
+          row.priceBreaks = details.priceBreaks;
+          row.priceUpdatedAt = now();
+        }
+      } catch (_error) {
+        // Import remains usable when LCSC is temporarily unavailable.
+      }
     }
 
     const existing = findImportPart(store.parts, row);
@@ -617,12 +696,7 @@ app.post("/api/bom/check", (req, res) => {
 
   res.json({
     lines,
-    summary: {
-      total: lines.length,
-      ready: lines.filter((line) => line.status === "ready").length,
-      short: lines.filter((line) => line.status === "short").length,
-      missing: lines.filter((line) => line.status === "missing").length
-    }
+    summary: bomSummary(lines)
   });
 });
 
@@ -636,12 +710,7 @@ app.post("/api/bom/upload", async (req, res) => {
     res.json({
       rows,
       lines,
-      summary: {
-        total: lines.length,
-        ready: lines.filter((line) => line.status === "ready").length,
-        short: lines.filter((line) => line.status === "short").length,
-        missing: lines.filter((line) => line.status === "missing").length
-      }
+      summary: bomSummary(lines)
     });
   } catch (error) {
     res.status(400).json({ error: error.message || "Could not parse XLSX BOM" });
@@ -713,6 +782,7 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/check", description: "Compare BOM rows with inventory. Body: { rows: [{ lcsc, mpn, name, quantity, package, value }] }." },
       { method: "POST", path: "/bom/upload", description: "Upload an XLSX BOM as base64. Body: { fileName, fileBase64 }. Returns compatible stock matches and shortages." },
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
+      { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],
     useExample: {

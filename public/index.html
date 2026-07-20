@@ -90,6 +90,7 @@
             <div class="panel">
               <h3>What you have</h3>
               <div id="bomSummary" class="summary-strip"></div>
+              <div id="bomCostSummary" class="bom-cost-summary"></div>
               <div id="bomHaveResults" class="results-list"></div>
             </div>
             <div class="panel">
@@ -164,6 +165,14 @@
             <div class="panel">
               <h3>Part matching</h3>
               <p class="hint">ReelKeeper matches imported rows by LCSC part number first, then manufacturer part number, then compatible passive specs where safe.</p>
+            </div>
+            <div class="panel pricing-settings">
+              <div>
+                <h3>LCSC pricing</h3>
+                <p class="hint">Refresh USD price breaks for every component with an LCSC part number. BOM estimates use the price break for the quantity needed on one board.</p>
+                <p class="pricing-status" id="pricingStatus">Pricing has not been updated in this session.</p>
+              </div>
+              <button id="updatePricingBtn">Update LCSC pricing</button>
             </div>
             <div class="panel danger-zone">
               <div>
