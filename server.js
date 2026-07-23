@@ -2,6 +2,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const yauzl = require("yauzl");
+const XLSX = require("@e965/xlsx");
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -61,6 +62,7 @@ function normalizePart(input, existing = {}) {
     manufacturer: text(input.manufacturer) || existing.manufacturer || "",
     mpn: text(input.mpn || input.manufacturerPartNumber) || existing.mpn || "",
     lcsc: text(input.lcsc || input.lcscPartNumber || input.supplierPart) || existing.lcsc || "",
+    mouser: text(input.mouser || input.mouserPartNumber) || existing.mouser || "",
     package: text(input.package || input.footprint) || existing.package || "",
     value: text(input.value) || existing.value || "",
     description: text(input.description) || existing.description || "",
@@ -74,6 +76,7 @@ function normalizePart(input, existing = {}) {
       .filter((item) => item.unitPrice > 0)
       .sort((a, b) => a.quantity - b.quantity),
     priceCurrency: priceBreaks.length ? "USD" : (existing.priceCurrency || ""),
+    priceSource: text(input.priceSource) || existing.priceSource || "",
     priceUpdatedAt: text(input.priceUpdatedAt) || existing.priceUpdatedAt || "",
     notes: text(input.notes) || existing.notes || "",
     createdAt: existing.createdAt || now(),
@@ -93,6 +96,7 @@ function normalizeStorageType(value) {
 function partKey(part) {
   return [
     part.lcsc && `lcsc:${part.lcsc.toLowerCase()}`,
+    part.mouser && `mouser:${part.mouser.toLowerCase()}`,
     part.mpn && `mpn:${part.mpn.toLowerCase()}`,
     part.name && part.package && part.value && `combo:${part.name.toLowerCase()}|${part.package.toLowerCase()}|${part.value.toLowerCase()}`
   ].filter(Boolean);
@@ -206,6 +210,7 @@ function compatibility(part, request) {
   const req = normalizePart(request);
   const have = part.specs || deriveSpecs(part);
   const exact = (req.lcsc && part.lcsc && req.lcsc.toLowerCase() === part.lcsc.toLowerCase()) ||
+    (req.mouser && part.mouser && req.mouser.toLowerCase() === part.mouser.toLowerCase()) ||
     (req.mpn && part.mpn && req.mpn.toLowerCase() === part.mpn.toLowerCase());
 
   if (exact) {
@@ -246,6 +251,7 @@ function compatibleParts(parts, row) {
 function bomRequestKey(row) {
   const normalized = normalizePart(row);
   if (normalized.lcsc) return `lcsc:${normalized.lcsc.toLowerCase()}`;
+  if (normalized.mouser) return `mouser:${normalized.mouser.toLowerCase()}`;
   if (normalized.mpn) return `mpn:${normalized.mpn.toLowerCase()}`;
   const specs = normalized.specs || deriveSpecs(normalized);
   return JSON.stringify({
@@ -387,6 +393,9 @@ function normalizeImportKey(header) {
   const map = {
     lcscpartnumber: "lcsc",
     supplierpart: "lcsc",
+    mouser: "mouser",
+    mouserpart: "mouser",
+    mouserpartnumber: "mouser",
     manufacturepartnumber: "mpn",
     manufacturerpartnumber: "mpn",
     manufacturerpart: "mpn",
@@ -405,7 +414,10 @@ function normalizeImportKey(header) {
     packagingstatus: "storageType",
     storagetype: "storageType",
     storage: "storageType",
-    packaging: "storageType"
+    packaging: "storageType",
+    pricebreaks: "priceBreaks",
+    pricecurrency: "priceCurrency",
+    pricesource: "priceSource"
   };
   return map[key] || key;
 }
@@ -423,6 +435,36 @@ function normalizeImportedRow(row) {
   output.storageType = normalizeStorageType(output.storageType || output.packagingStatus);
   output.category = output.category || inferCategory(output);
   return output;
+}
+
+function parseMoney(value) {
+  const parsed = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseMouserWorkbook(buffer) {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const sheetName = workbook.SheetNames.find((name) => /order details/i.test(name)) || workbook.SheetNames[0];
+  if (!sheetName) throw new Error("The Mouser workbook does not contain a worksheet");
+  const records = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "", raw: false });
+  return records.map((record) => {
+    const quantity = Number(String(record["Order Qty."] ?? record["Order Qty"] ?? "").replace(/[^0-9.-]/g, "")) || 0;
+    const unitPrice = Math.round((parseMoney(record["Price (USD)"]) + parseMoney(record["Tariff: Price (USD)"])) * 1e6) / 1e6;
+    const description = String(record["Desc.:"] || record["Desc."] || record.Description || "").trim();
+    const mpn = String(record["Mfr. #:"] || record["Mfr. #"] || "").trim();
+    const row = {
+      mouser: String(record["Mouser #:"] || record["Mouser #"] || "").trim(),
+      mpn,
+      name: description,
+      description,
+      quantity,
+      category: inferCategory({ name: description, description, mpn }),
+      priceSource: "Mouser",
+      priceCurrency: "USD"
+    };
+    if (unitPrice > 0) row.priceBreaks = [{ quantity: Math.max(1, quantity), unitPrice }];
+    return row;
+  }).filter((row) => row.quantity > 0 && (row.mouser || row.mpn || row.name));
 }
 
 function recordMovement(store, movement) {
@@ -486,7 +528,7 @@ app.get("/api/parts", (req, res) => {
   const lowOnly = req.query.low === "true";
 
   const parts = store.parts.filter((part) => {
-    const haystack = [part.name, part.category, part.manufacturer, part.mpn, part.lcsc, part.package, part.value, part.location].join(" ").toLowerCase();
+    const haystack = [part.name, part.category, part.manufacturer, part.mpn, part.lcsc, part.mouser, part.package, part.value, part.location].join(" ").toLowerCase();
     return (!q || haystack.includes(q)) &&
       (!category || part.category.toLowerCase() === category) &&
       (!lowOnly || part.quantity <= part.minimum);
@@ -564,6 +606,7 @@ app.post("/api/pricing/lcsc/update", async (_req, res) => {
       store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc).forEach((part) => {
         part.priceBreaks = details.priceBreaks;
         part.priceCurrency = "USD";
+        part.priceSource = "LCSC";
         part.priceUpdatedAt = updatedAt;
         if (!part.photoUrl && details.photoUrl) part.photoUrl = details.photoUrl;
         part.updatedAt = updatedAt;
@@ -575,6 +618,18 @@ app.post("/api/pricing/lcsc/update", async (_req, res) => {
   }
   writeStore(store);
   res.json({ total: partNumbers.length, updated: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, results });
+});
+
+app.post("/api/import/mouser/preview", (req, res) => {
+  try {
+    const base64 = String(req.body.fileBase64 || "").replace(/^data:.*?;base64,/, "");
+    if (!base64) return res.status(400).json({ error: "fileBase64 is required" });
+    const rows = parseMouserWorkbook(Buffer.from(base64, "base64"));
+    if (!rows.length) return res.status(400).json({ error: "No Mouser order lines were found in this workbook" });
+    res.json({ rows });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not parse Mouser order workbook" });
+  }
 });
 
 app.post("/api/import/order", async (req, res) => {
@@ -595,6 +650,7 @@ app.post("/api/import/order", async (req, res) => {
   for (const row of rows) {
     const quantity = Number(row.quantity || row.qty || row.orderQuantity || 0);
     if (!Number.isFinite(quantity) || quantity <= 0) continue;
+    if (row.priceBreaks?.length && !row.priceUpdatedAt) row.priceUpdatedAt = now();
     row.storageType = normalizeStorageType(row.storageType || batch.storageType);
     if (row.lcsc) {
       try {
@@ -602,6 +658,7 @@ app.post("/api/import/order", async (req, res) => {
         if (!row.photoUrl) row.photoUrl = details.photoUrl;
         if (details.priceBreaks.length) {
           row.priceBreaks = details.priceBreaks;
+          row.priceSource = "LCSC";
           row.priceUpdatedAt = now();
         }
       } catch (_error) {
@@ -777,8 +834,9 @@ app.get("/api/docs", (_req, res) => {
       { method: "PATCH", path: "/parts/:id", description: "Update a part." },
       { method: "DELETE", path: "/parts/:id", description: "Delete a part." },
       { method: "POST", path: "/import/order", description: "Import purchased parts. Body: { rows: [{ lcsc, mpn, name, quantity, category, package, value, manufacturer }] }." },
-      { method: "GET", path: "/import/order/history", description: "List LCSC order import batches, including undone imports." },
-      { method: "POST", path: "/import/order/:id/undo", description: "Undo one LCSC order import batch and subtract those quantities from components." },
+      { method: "POST", path: "/import/mouser/preview", description: "Parse a Mouser .xls or .xlsx order before importing. Body: { fileName, fileBase64 }." },
+      { method: "GET", path: "/import/order/history", description: "List supplier order import batches, including undone imports." },
+      { method: "POST", path: "/import/order/:id/undo", description: "Undo one supplier order import batch and subtract those quantities from components." },
       { method: "POST", path: "/bom/check", description: "Compare BOM rows with inventory. Body: { rows: [{ lcsc, mpn, name, quantity, package, value }] }." },
       { method: "POST", path: "/bom/upload", description: "Upload an XLSX BOM as base64. Body: { fileName, fileBase64 }. Returns compatible stock matches and shortages." },
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },

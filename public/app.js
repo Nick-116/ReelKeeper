@@ -28,6 +28,7 @@ const fields = {
   manufacturer: $("#partManufacturer"),
   mpn: $("#partMpn"),
   lcsc: $("#partLcsc"),
+  mouser: $("#partMouser"),
   package: $("#partPackage"),
   value: $("#partValue"),
   quantity: $("#partQuantity"),
@@ -290,7 +291,7 @@ function filteredParts() {
   const category = $("#categoryFilter").value;
 
   return state.parts.filter((part) => {
-    const haystack = [part.name, part.category, part.manufacturer, part.mpn, part.lcsc, part.package, part.value].join(" ").toLowerCase();
+    const haystack = [part.name, part.category, part.manufacturer, part.mpn, part.lcsc, part.mouser, part.package, part.value].join(" ").toLowerCase();
     const advancedOk = Object.entries(state.advancedFilters).every(([key, value]) => !value || partAdvancedValue(part, key) === value);
     return (!q || haystack.includes(q)) &&
       (!category || part.category === category) &&
@@ -324,10 +325,11 @@ function renderParts() {
           <h3>${escapeHtml(displayName(part))}</h3>
           <div class="meta">
             ${part.lcsc ? `<span class="pill">${escapeHtml(part.lcsc)}</span>` : ""}
+            ${part.mouser ? `<span class="pill">Mouser ${escapeHtml(part.mouser)}</span>` : ""}
             ${part.package ? `<span class="pill">${escapeHtml(part.package)}</span>` : ""}
             ${part.value ? `<span class="pill">${escapeHtml(part.value)}</span>` : ""}
             ${part.storageType === "loose" ? `<span class="pill loose-pill">Loose stock</span>` : ""}
-            ${part.priceBreaks?.length ? `<span class="pill price-pill">From $${Number(part.priceBreaks.at(-1).unitPrice).toFixed(4)}</span>` : ""}
+            ${part.priceBreaks?.length ? `<span class="pill price-pill">${part.priceSource ? `${escapeHtml(part.priceSource)} ` : "From "}$${Number(part.priceBreaks.at(-1).unitPrice).toFixed(4)}</span>` : ""}
           </div>
         </div>
         <div class="component-detail">
@@ -379,6 +381,7 @@ function formPayload() {
     manufacturer: fields.manufacturer.value,
     mpn: fields.mpn.value,
     lcsc: fields.lcsc.value,
+    mouser: fields.mouser.value,
     package: fields.package.value,
     value: fields.value.value,
     quantity: Number(fields.quantity.value || 0),
@@ -503,7 +506,7 @@ function markBomLineCovered(lineIndex) {
 }
 
 function bomMatchHaystack(part) {
-  return [part.name, part.lcsc, part.mpn, part.category, part.value, part.package, part.manufacturer].filter(Boolean).join(" ").toLowerCase();
+  return [part.name, part.lcsc, part.mouser, part.mpn, part.category, part.value, part.package, part.manufacturer].filter(Boolean).join(" ").toLowerCase();
 }
 
 function renderBomMatchSearch() {
@@ -657,8 +660,9 @@ function previewRows(rows, fileName, source) {
   `;
   $("#importPreviewList").innerHTML = validRows.slice(0, 80).map((row) => `
     <div class="preview-row" data-preview-index="${validRows.indexOf(row)}">
-      <strong>${escapeHtml(row.name || row.description || row.mpn || row.lcsc || "Unnamed part")}</strong>
-      <span class="meta">${escapeHtml([row.lcsc, row.mpn, row.package, row.value].filter(Boolean).join(" · "))}</span>
+      <strong>${escapeHtml(row.name || row.description || row.mpn || row.lcsc || row.mouser || "Unnamed part")}</strong>
+      <span class="meta">${escapeHtml([row.lcsc, row.mouser ? `Mouser ${row.mouser}` : "", row.mpn, row.package, row.value].filter(Boolean).join(" · "))}</span>
+      ${row.priceBreaks?.length ? `<span class="meta">Saved unit cost: $${Number(row.priceBreaks[0].unitPrice).toFixed(4)}${row.priceSource ? ` from ${escapeHtml(row.priceSource)}` : ""}</span>` : ""}
       <label class="preview-storage">
         <span>Packaging</span>
         <select data-preview-storage="${validRows.indexOf(row)}">
@@ -745,6 +749,23 @@ async function importOrder() {
   const text = await file.text();
   const rows = parseCsv(text);
   previewRows(rows, file.name, "orderFile");
+}
+
+async function importMouserOrder() {
+  const input = $("#mouserOrderFile");
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    const fileBase64 = await fileToBase64(file);
+    const data = await api("/api/import/mouser/preview", {
+      method: "POST",
+      body: JSON.stringify({ fileName: file.name, fileBase64 })
+    });
+    previewRows(data.rows, file.name, "mouserOrderFile");
+  } catch (error) {
+    input.value = "";
+    window.alert(`Could not read Mouser order: ${error.message}`);
+  }
 }
 
 async function importTemplate() {
@@ -961,6 +982,7 @@ function bindEvents() {
   $("#clearSearchBtn").addEventListener("click", resetComponentSearch);
   $("#manualAddComponentBtn").addEventListener("click", () => openPartDialog());
   $("#orderFile").addEventListener("change", importOrder);
+  $("#mouserOrderFile").addEventListener("change", importMouserOrder);
   $("#templateFile").addEventListener("change", importTemplate);
   $("#exportTemplateBtn").addEventListener("click", exportTemplate);
   $("#importPreviewForm").addEventListener("submit", confirmImport);

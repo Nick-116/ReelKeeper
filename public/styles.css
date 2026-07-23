@@ -584,7 +584,7 @@ img.component-thumb:hover {
 }
 
 .add-inventory-grid.center-stage {
-  grid-template-columns: repeat(3, minmax(220px, 280px));
+  grid-template-columns: repeat(2, minmax(220px, 280px));
   align-items: center;
   justify-content: center;
 }

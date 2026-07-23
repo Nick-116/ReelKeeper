@@ -8,6 +8,7 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "@e965/xlsx": "^0.20.3",
     "express": "^4.19.2",
     "yauzl": "^3.4.0"
   },

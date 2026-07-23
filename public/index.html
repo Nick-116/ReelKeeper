@@ -130,6 +130,16 @@
             </div>
             <div class="panel upload-panel compact-upload action-tile">
               <div>
+                <h3>Upload Mouser Order</h3>
+                <p class="hint">Choose the order details workbook from Mouser. Pricing and tariff cost are saved for BOM estimates.</p>
+              </div>
+              <label class="file-picker">
+                <span>Mouser order XLS</span>
+                <input id="mouserOrderFile" type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+              </label>
+            </div>
+            <div class="panel upload-panel compact-upload action-tile">
+              <div>
                 <h3>Inventory Template</h3>
                 <p class="hint">Export a CSV template, fill it in, then import it to add stock manually.</p>
               </div>
@@ -226,7 +236,7 @@
           <div class="settings-panel" id="settings-history">
             <div class="panel">
               <h3>Order Import History</h3>
-              <p class="hint">Undo an imported LCSC order if you cancel it after adding it to ReelKeeper.</p>
+              <p class="hint">Undo an imported LCSC or Mouser order if you cancel it after adding it to ReelKeeper.</p>
               <div id="importHistory" class="results-list"></div>
             </div>
           </div>
@@ -254,6 +264,7 @@
           <label>Manufacturer<input id="partManufacturer"></label>
           <label>MPN<input id="partMpn"></label>
           <label>LCSC Part Number<input id="partLcsc" placeholder="C25804"></label>
+          <label>Mouser Part Number<input id="partMouser"></label>
           <label>Package<input id="partPackage" placeholder="0603"></label>
           <label>Value<input id="partValue" placeholder="10k"></label>
           <label>Quantity<input id="partQuantity" type="number" min="0" step="1"></label>
@@ -321,7 +332,7 @@
       <div class="loading-content">
         <span class="loading-spinner" aria-hidden="true"></span>
         <strong>Adding components</strong>
-        <span>Looking up part details and photos from LCSC...</span>
+        <span>Saving part details, pricing, and inventory...</span>
       </div>
     </div>
     <datalist id="categoryOptions"></datalist>
