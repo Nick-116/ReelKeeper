@@ -517,8 +517,126 @@ async function lookupLcscDetails(lcsc, refresh = false) {
   }
 }
 
+function openPnpId(value, fallback) {
+  const cleaned = String(value || "").trim().replace(/[\u0000-\u001f\u007f]/g, "");
+  return cleaned || fallback;
+}
+
+function openPnpPackageId(part) {
+  let packageId = openPnpId(part.package || part.specs?.package, "UNASSIGNED").toUpperCase().replace(/\s+/g, "-");
+  if (/^(?:0201|0402|0603|0805|1206|1210|1812|2010|2512)$/.test(packageId)) {
+    const prefix = part.category === "Resistors" ? "R" : part.category === "Capacitors" ? "C" : part.category === "Inductors" ? "L" : "";
+    packageId = `${prefix}${packageId}`;
+  }
+  return packageId;
+}
+
+function openPnpParts(parts) {
+  const unique = new Map();
+  parts.forEach((part) => {
+    const id = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
+    const key = id.toUpperCase();
+    const existing = unique.get(key);
+    const candidate = {
+      id,
+      name: part.name || part.description || part.value || id,
+      packageId: openPnpPackageId(part),
+      quantity: Number(part.quantity || 0),
+      lcsc: part.lcsc || "",
+      mouser: part.mouser || ""
+    };
+    if (!existing) {
+      unique.set(key, candidate);
+      return;
+    }
+    const preferred = candidate.quantity > existing.quantity ? candidate : existing;
+    unique.set(key, {
+      ...preferred,
+      lcsc: existing.lcsc || candidate.lcsc,
+      mouser: existing.mouser || candidate.mouser
+    });
+  });
+  return [...unique.values()].map((part) => {
+    const identifiers = [part.lcsc && `LCSC ${part.lcsc}`, part.mouser && `Mouser ${part.mouser}`].filter(Boolean);
+    return {
+      id: part.id,
+      name: [part.name, identifiers.length ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
+      packageId: part.packageId
+    };
+  }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+}
+
+function escapeXml(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+function buildOpenPnpPartsXml(parts) {
+  const rows = openPnpParts(parts).map((part) =>
+    `  <part id="${escapeXml(part.id)}" name="${escapeXml(part.name)}" height-units="Millimeters" height="0.0" package-id="${escapeXml(part.packageId)}" speed="1.0"/>`
+  );
+  return [`<?xml version="1.0" encoding="UTF-8"?>`, `<openpnp-parts>`, ...rows, `</openpnp-parts>`, ""].join("\n");
+}
+
+function buildOpenPnpImportScript(parts) {
+  const data = JSON.stringify(openPnpParts(parts), null, 2);
+  return `// ReelKeeper OpenPnP additive parts importer
+// Generated ${now()}. Existing package and part IDs are never modified.
+var Part = Java.type("org.openpnp.model.Part");
+var Package = Java.type("org.openpnp.model.Package");
+var JOptionPane = Java.type("javax.swing.JOptionPane");
+
+var reelKeeperParts = ${data};
+var addedParts = 0;
+var skippedParts = 0;
+var addedPackages = 0;
+
+reelKeeperParts.forEach(function(item) {
+  var pkg = config.getPackage(item.packageId);
+  if (pkg == null) {
+    pkg = new Package(item.packageId);
+    pkg.setDescription("Created by ReelKeeper import");
+    config.addPackage(pkg);
+    addedPackages++;
+  }
+
+  if (config.getPart(item.id) != null) {
+    skippedParts++;
+    return;
+  }
+
+  var part = new Part(item.id);
+  part.setName(item.name);
+  part.setPackage(pkg);
+  part.setSpeed(1.0);
+  config.addPart(part);
+  addedParts++;
+});
+
+config.save();
+var summary = "ReelKeeper import complete.\\nAdded parts: " + addedParts +
+  "\\nExisting parts skipped: " + skippedParts +
+  "\\nPackages created: " + addedPackages;
+print(summary);
+JOptionPane.showMessageDialog(gui, summary, "ReelKeeper Import", JOptionPane.INFORMATION_MESSAGE);
+`;
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, name: "ReelKeeper", time: now() });
+});
+
+app.get("/api/export/openpnp/parts.xml", (_req, res) => {
+  const store = readStore();
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="reelkeeper-openpnp-parts.xml"');
+  res.send(buildOpenPnpPartsXml(store.parts));
+});
+
+app.get("/api/export/openpnp/import-script.js", (_req, res) => {
+  const store = readStore();
+  res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="ReelKeeper_Import_Parts.js"');
+  res.send(buildOpenPnpImportScript(store.parts));
 });
 
 app.get("/api/parts", (req, res) => {
@@ -841,6 +959,8 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/upload", description: "Upload an XLSX BOM as base64. Body: { fileName, fileBase64 }. Returns compatible stock matches and shortages." },
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
       { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
+      { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
+      { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],
     useExample: {

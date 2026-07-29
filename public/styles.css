@@ -758,6 +758,81 @@ img.component-thumb:hover {
 .pricing-settings .hint,
 .pricing-status { margin-bottom: 0; }
 
+.openpnp-export {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.openpnp-export .hint,
+.openpnp-export-note {
+  margin: 0;
+}
+
+.openpnp-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.button-link:hover {
+  border-color: var(--accent);
+}
+
+.button-link.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.download-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-bottom: 2px solid currentColor;
+  position: relative;
+}
+
+.download-icon::before {
+  content: "";
+  position: absolute;
+  left: 0.4rem;
+  top: -0.2rem;
+  width: 2px;
+  height: 0.65rem;
+  background: currentColor;
+}
+
+.download-icon::after {
+  content: "";
+  position: absolute;
+  left: 0.22rem;
+  top: 0.22rem;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.openpnp-export-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 #updatePricingBtn.is-loading::before {
   content: "";
   display: inline-block;

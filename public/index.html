@@ -184,6 +184,17 @@
               </div>
               <button id="updatePricingBtn">Update LCSC pricing</button>
             </div>
+            <div class="panel openpnp-export">
+              <div>
+                <h3>OpenPnP library export</h3>
+                <p class="hint">Download a complete parts.xml snapshot, or use the additive script to create only packages and parts that do not already exist in OpenPnP.</p>
+              </div>
+              <div class="openpnp-export-actions">
+                <a class="button-link" href="/api/export/openpnp/parts.xml" download><span class="download-icon" aria-hidden="true"></span>Export parts.xml</a>
+                <a class="button-link primary" href="/api/export/openpnp/import-script.js" download><span class="download-icon" aria-hidden="true"></span>Export import script</a>
+              </div>
+              <p class="openpnp-export-note">Put the script in OpenPnP's scripts directory, then run <strong>ReelKeeper_Import_Parts.js</strong> from the Scripts menu.</p>
+            </div>
             <div class="panel danger-zone">
               <div>
                 <h3>Reset ReelKeeper</h3>
