@@ -883,6 +883,17 @@ img.component-thumb:hover {
 
 .openpnp-issue:last-child { border-bottom: 0; }
 
+.openpnp-package-map {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.openpnp-package-map select {
+  min-width: 0;
+}
+
 #updatePricingBtn.is-loading::before,
 #fetchEasyEdaFootprintsBtn.is-loading::before {
   content: "";
@@ -1322,6 +1333,10 @@ dialog h3 {
   .openpnp-issue {
     grid-template-columns: 1fr;
     gap: 0.35rem;
+  }
+
+  .openpnp-package-map {
+    grid-template-columns: 1fr;
   }
 
   .footprint-review-row {

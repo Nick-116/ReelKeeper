@@ -6,7 +6,9 @@ const state = {
   currentBom: null,
   pendingBomMatchLineIndex: null,
   advancedFilters: {},
-  pendingFootprints: null
+  pendingFootprints: null,
+  openPnpIssues: [],
+  knownOpenPnpPackages: []
 };
 
 const routes = {
@@ -857,30 +859,65 @@ async function loadOpenPnpReadiness() {
   const container = $("#openPnpReadiness");
   if (!container) return;
   try {
-    const status = await api("/api/export/openpnp/status");
+    const [status, known] = await Promise.all([
+      api("/api/export/openpnp/status"),
+      api("/api/openpnp/packages/known")
+    ]);
+    state.knownOpenPnpPackages = known.packages || [];
     if (!status.total) {
+      state.openPnpIssues = [];
       container.className = "openpnp-readiness is-empty";
       container.innerHTML = `<strong>No components to export</strong><span>Footprint coverage will appear after components are added.</span>`;
       return;
     }
     const issues = status.items.filter((item) => !item.ready);
+    state.openPnpIssues = issues;
     container.className = `openpnp-readiness ${issues.length ? "has-issues" : "is-ready"}`;
     container.innerHTML = `
       <div class="openpnp-readiness-summary">
         <strong>${issues.length ? `${status.needsReview.toLocaleString()} footprint${status.needsReview === 1 ? "" : "s"} need review` : "All footprints are ready"}</strong>
         <span>${status.ready.toLocaleString()} of ${status.total.toLocaleString()} components will export with pad geometry.</span>
       </div>
-      ${issues.length ? `<div class="openpnp-issue-list">${issues.map((item) => `
+      ${issues.length ? `<div class="openpnp-issue-list">${issues.map((item, index) => `
         <div class="openpnp-issue">
           <div><strong>${escapeHtml(item.name || item.id)}</strong><span>${escapeHtml(item.id)}</span></div>
           <span class="pill">${escapeHtml(item.packageId)}</span>
           <span>${escapeHtml(item.issue)}</span>
+          <div class="openpnp-package-map">
+            <select data-package-map-select="${index}" aria-label="Package for ${escapeHtml(item.name || item.id)}">
+              <option value="">Select a known package</option>
+              ${state.knownOpenPnpPackages.map((pkg) => `<option value="${escapeHtml(pkg.id)}">${escapeHtml(pkg.id)} · ${pkg.padCount} pads · ${formatCompactNumber(pkg.bodyWidth)} x ${formatCompactNumber(pkg.bodyHeight)} mm</option>`).join("")}
+            </select>
+            <button data-assign-package="${index}">Use package</button>
+          </div>
         </div>
       `).join("")}</div>` : ""}
     `;
   } catch (error) {
     container.className = "openpnp-readiness has-issues";
     container.innerHTML = `<strong>Footprint check failed</strong><span>${escapeHtml(error.message)}</span>`;
+  }
+}
+
+async function assignKnownOpenPnpPackage(index, button) {
+  const issue = state.openPnpIssues[index];
+  const select = $("#openPnpReadiness").querySelector(`[data-package-map-select="${index}"]`);
+  if (!issue || !select?.value) {
+    window.alert("Select a known package first.");
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await api("/api/openpnp/packages/assign", {
+      method: "POST",
+      body: JSON.stringify({ partIds: issue.partIds, packageId: select.value })
+    });
+    await loadParts();
+    await loadOpenPnpReadiness();
+    window.alert(`${result.updated.toLocaleString()} component record${result.updated === 1 ? "" : "s"} mapped to ${result.packageId}.`);
+  } catch (error) {
+    window.alert(`Package mapping failed: ${error.message}`);
+    button.disabled = false;
   }
 }
 
@@ -1037,7 +1074,8 @@ function auditActionLabel(type) {
     "order-import-undo": "Order import undone",
     consume: "Component used",
     "bom-match": "BOM match saved",
-    "footprint-import": "EasyEDA footprint approved"
+    "footprint-import": "EasyEDA footprint approved",
+    "footprint-map": "OpenPnP package mapped"
   })[type] || type;
 }
 
@@ -1170,6 +1208,10 @@ function bindEvents() {
   $("#closeFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);
+  $("#openPnpReadiness")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-assign-package]");
+    if (button) assignKnownOpenPnpPackage(Number(button.dataset.assignPackage), button);
+  });
   $$(".settings-tab").forEach((button) => {
     button.addEventListener("click", () => activateSettingsPanel(button.dataset.settingsPanel));
   });

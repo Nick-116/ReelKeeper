@@ -545,7 +545,21 @@ const OPENPNP_PASSIVE_FOOTPRINTS = {
   "1210": { bodyWidth: 3.2, bodyHeight: 2.5, padWidth: 1.2, padHeight: 2.7, padCenter: 1.5 }
 };
 
+const OPENPNP_COMMON_PACKAGES = {
+  "SOT-23-3-COMMON": {
+    units: "Millimeters",
+    bodyWidth: 1.3,
+    bodyHeight: 2.9,
+    pads: [
+      { name: "1", x: -1.1, y: 0.95, width: 1.0, height: 0.8 },
+      { name: "2", x: -1.1, y: -0.95, width: 1.0, height: 0.8 },
+      { name: "3", x: 1.1, y: 0, width: 1.0, height: 0.8 }
+    ]
+  }
+};
+
 function openPnpFootprint(packageId) {
+  if (OPENPNP_COMMON_PACKAGES[packageId]) return OPENPNP_COMMON_PACKAGES[packageId];
   const match = String(packageId).match(/^[RCL](0201|0402|0603|0805|1206|1210)$/);
   if (!match) return null;
   const dimensions = OPENPNP_PASSIVE_FOOTPRINTS[match[1]];
@@ -703,7 +717,8 @@ function openPnpParts(parts) {
       lcsc: part.lcsc || "",
       mouser: part.mouser || "",
       footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
-      footprintSource: part.openPnpFootprint ? "EasyEDA" : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard passive template" : "")
+      footprintSource: part.openPnpFootprint ? (part.openPnpFootprintSource || "EasyEDA") : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard package" : ""),
+      partIds: [part.id]
     };
     if (!existing) {
       unique.set(key, candidate);
@@ -715,7 +730,8 @@ function openPnpParts(parts) {
       lcsc: existing.lcsc || candidate.lcsc,
       mouser: existing.mouser || candidate.mouser,
       footprint: existing.footprint || candidate.footprint,
-      footprintSource: existing.footprintSource || candidate.footprintSource
+      footprintSource: existing.footprintSource || candidate.footprintSource,
+      partIds: [...new Set([...(existing.partIds || []), ...(candidate.partIds || [])])]
     });
   });
   return [...unique.values()].map((part) => {
@@ -725,7 +741,8 @@ function openPnpParts(parts) {
       name: [part.name, identifiers.length ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
       packageId: part.packageId,
       footprint: part.footprint,
-      footprintSource: part.footprintSource
+      footprintSource: part.footprintSource,
+      partIds: part.partIds || []
     };
   }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
@@ -772,7 +789,8 @@ function openPnpExportStatus(parts) {
       packageId: part.packageId,
       ready: Boolean(footprint),
       source: part.footprintSource || "",
-      issue
+      issue,
+      partIds: part.partIds
     };
   });
   const ready = items.filter((item) => item.ready).length;
@@ -782,6 +800,28 @@ function openPnpExportStatus(parts) {
     needsReview: items.length - ready,
     items
   };
+}
+
+function knownOpenPnpPackages(parts) {
+  const packages = new Map();
+  ["R", "C", "L"].forEach((prefix) => {
+    Object.keys(OPENPNP_PASSIVE_FOOTPRINTS).forEach((size) => {
+      const id = `${prefix}${size}`;
+      packages.set(id, { id, footprint: openPnpFootprint(id), source: "ReelKeeper standard package" });
+    });
+  });
+  Object.entries(OPENPNP_COMMON_PACKAGES).forEach(([id, footprint]) => {
+    packages.set(id, { id, footprint, source: "ReelKeeper common package" });
+  });
+  openPnpPackages(parts).filter((pkg) => pkg.footprint).forEach((pkg) => {
+    packages.set(pkg.id, { id: pkg.id, footprint: pkg.footprint, source: pkg.footprintSource || "Inventory component" });
+  });
+  return [...packages.values()].map((pkg) => ({
+    ...pkg,
+    padCount: pkg.footprint.pads.length,
+    bodyWidth: pkg.footprint.bodyWidth,
+    bodyHeight: pkg.footprint.bodyHeight
+  })).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
 
 function buildOpenPnpPackagesXml(parts) {
@@ -897,6 +937,43 @@ app.get("/api/export/openpnp/packages.xml", (_req, res) => {
 app.get("/api/export/openpnp/status", (_req, res) => {
   const store = readStore();
   res.json(openPnpExportStatus(store.parts));
+});
+
+app.get("/api/openpnp/packages/known", (_req, res) => {
+  const store = readStore();
+  const packages = knownOpenPnpPackages(store.parts).map(({ footprint, ...pkg }) => pkg);
+  res.json({ packages });
+});
+
+app.post("/api/openpnp/packages/assign", (req, res) => {
+  const partIds = new Set(Array.isArray(req.body?.partIds) ? req.body.partIds.map(String) : []);
+  const packageId = String(req.body?.packageId || "");
+  if (!partIds.size || !packageId) return res.status(400).json({ error: "Select a component and package." });
+  const store = readStore();
+  const knownPackage = knownOpenPnpPackages(store.parts).find((pkg) => pkg.id === packageId);
+  if (!knownPackage?.footprint?.pads?.length) return res.status(400).json({ error: "The selected package has no verified pad geometry." });
+
+  let updated = 0;
+  store.parts.forEach((part) => {
+    if (!partIds.has(part.id)) return;
+    part.openPnpPackageId = knownPackage.id;
+    part.openPnpFootprint = JSON.parse(JSON.stringify(knownPackage.footprint));
+    part.openPnpFootprintSource = `Mapped from ${knownPackage.id}`;
+    part.openPnpFootprintUpdatedAt = now();
+    part.updatedAt = now();
+    updated++;
+  });
+  if (!updated) return res.status(404).json({ error: "Component not found." });
+  store.movements.unshift({
+    id: `move_${Date.now()}`,
+    type: "footprint-map",
+    partName: `${updated} component${updated === 1 ? "" : "s"}`,
+    delta: 0,
+    source: knownPackage.id,
+    at: now()
+  });
+  writeStore(store);
+  res.json({ updated, packageId: knownPackage.id });
 });
 
 app.post("/api/openpnp/footprints/fetch", async (req, res) => {
@@ -1298,6 +1375,8 @@ app.get("/api/docs", (_req, res) => {
       { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
       { method: "GET", path: "/export/openpnp/packages.xml", description: "Download OpenPnP packages.xml with generated footprints for standard two-terminal passive packages." },
       { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },
+      { method: "GET", path: "/openpnp/packages/known", description: "List built-in and inventory package footprints available for manual mapping." },
+      { method: "POST", path: "/openpnp/packages/assign", description: "Assign a known package footprint to one or more inventory component IDs." },
       { method: "POST", path: "/openpnp/footprints/fetch", description: "Fetch EasyEDA footprint previews for inventory components with LCSC numbers." },
       { method: "POST", path: "/openpnp/footprints/approve", description: "Approve fetched EasyEDA footprint previews using the temporary token and selected LCSC numbers." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
