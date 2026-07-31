@@ -524,8 +524,36 @@ function openPnpId(value, fallback) {
   return cleaned || fallback;
 }
 
+function compactDimension(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number) : String(value);
+}
+
+function simpleOpenPnpPackageId(value) {
+  let normalized = openPnpId(value, "PACKAGE").toUpperCase()
+    .replace(/^EE-/, "")
+    .replace(/-[A-F0-9]{8}$/, "")
+    .replace(/[^A-Z0-9.]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const passive = normalized.match(/(?:^|-)([RCL](?:0201|0402|0603|0805|1206|1210|1812|2010|2512))(?:-|$)/);
+  if (passive) return passive[1];
+
+  const family = normalized.match(/(?:^|-)((?:LQFP|TQFP|QFP|QFN|DFN|SOIC|SSOP|TSSOP|SOP|DIP|SOD|SOT)-?\d+(?:-\d+)?)(?:-|$)/);
+  if (family) {
+    let id = family[1].replace(/([A-Z])(?=\d)/, "$1-");
+    const dimensions = normalized.match(/(?:^|-)L(\d+(?:\.\d+)?)-W(\d+(?:\.\d+)?)(?:-|$)/);
+    const pitch = normalized.match(/(?:^|-)P(\d+(?:\.\d+)?)(?:-|$)/);
+    if (dimensions) id += `-${compactDimension(dimensions[1])}X${compactDimension(dimensions[2])}`;
+    if (pitch) id += `-P${compactDimension(pitch[1])}`;
+    if (/(?:^|-)EP(?:-|$)/.test(normalized)) id += "-EP";
+    return id;
+  }
+  return normalized.slice(0, 48) || "PACKAGE";
+}
+
 function openPnpPackageId(part) {
-  if (part.openPnpPackageId) return openPnpId(part.openPnpPackageId, "UNASSIGNED");
+  if (part.openPnpPackageId) return simpleOpenPnpPackageId(part.openPnpPackageId);
   let packageId = openPnpId(part.package || part.specs?.package, "UNASSIGNED").toUpperCase().replace(/\s+/g, "-");
   if (/^(?:0201|0402|0603|0805|1206|1210|1812|2010|2512)$/.test(packageId)) {
     const prefix = part.category === "Resistors" ? "R" : part.category === "Capacitors" ? "C" : part.category === "Inductors" ? "L" : "";
@@ -575,12 +603,7 @@ function openPnpFootprint(packageId) {
 }
 
 function easyEdaPackageId(packageName, packageUuid) {
-  const name = openPnpId(packageName, "PACKAGE").toUpperCase()
-    .replace(/[^A-Z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 70);
-  return `EE-${name || "PACKAGE"}-${packageUuid.slice(0, 8).toUpperCase()}`;
+  return simpleOpenPnpPackageId(packageName || `PACKAGE-${packageUuid.slice(0, 8)}`);
 }
 
 async function fetchEasyEdaJson(url) {
@@ -703,22 +726,62 @@ async function mapWithConcurrency(items, limit, worker) {
   return output;
 }
 
+function compactOpenPnpNumber(value) {
+  return Number(value.toPrecision(6)).toString().toUpperCase();
+}
+
+function openPnpElectricalValue(part) {
+  const electrical = (part.specs || deriveSpecs(part)).electrical;
+  if (!electrical || !Number.isFinite(electrical.value)) return "";
+  const value = electrical.value;
+  if (electrical.kind === "resistance") {
+    if (value >= 1_000_000) return `${compactOpenPnpNumber(value / 1_000_000)}M`;
+    if (value >= 1_000) return `${compactOpenPnpNumber(value / 1_000)}K`;
+    return `${compactOpenPnpNumber(value)}R`;
+  }
+  if (electrical.kind === "capacitance") {
+    if (value >= 1e-3) return `${compactOpenPnpNumber(value / 1e-3)}MF`;
+    if (value >= 1e-6) return `${compactOpenPnpNumber(value / 1e-6)}UF`;
+    if (value >= 1e-9) return `${compactOpenPnpNumber(value / 1e-9)}NF`;
+    return `${compactOpenPnpNumber(value / 1e-12)}PF`;
+  }
+  return "";
+}
+
+function openPnpPartIdentity(part) {
+  const packageId = openPnpPackageId(part);
+  const value = openPnpElectricalValue(part);
+  const supplierId = part.lcsc || (part.mouser ? `MOUSER-${part.mouser}` : "") || part.mpn;
+  if (["Resistors", "Capacitors"].includes(part.category) && value && supplierId) {
+    const type = part.category === "Resistors" ? "resistor" : "capacitor";
+    const cleanSupplierId = String(supplierId).toUpperCase().replace(/[^A-Z0-9._-]+/g, "-");
+    return {
+      id: `${value}-${packageId}-${cleanSupplierId}`,
+      name: `${value} ${packageId} ${type} - ${cleanSupplierId}`
+    };
+  }
+  const id = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
+  return { id, name: part.name || part.description || part.value || id };
+}
+
 function openPnpParts(parts) {
   const unique = new Map();
   parts.forEach((part) => {
-    const id = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
+    const identity = openPnpPartIdentity(part);
+    const id = identity.id;
     const key = id.toUpperCase();
     const existing = unique.get(key);
     const candidate = {
       id,
-      name: part.name || part.description || part.value || id,
+      name: identity.name,
       packageId: openPnpPackageId(part),
       quantity: Number(part.quantity || 0),
       lcsc: part.lcsc || "",
       mouser: part.mouser || "",
       footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
       footprintSource: part.openPnpFootprint ? (part.openPnpFootprintSource || "EasyEDA") : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard package" : ""),
-      partIds: [part.id]
+      partIds: [part.id],
+      legacyIds: [part.mpn, part.lcsc, part.mouser].filter(Boolean)
     };
     if (!existing) {
       unique.set(key, candidate);
@@ -731,18 +794,21 @@ function openPnpParts(parts) {
       mouser: existing.mouser || candidate.mouser,
       footprint: existing.footprint || candidate.footprint,
       footprintSource: existing.footprintSource || candidate.footprintSource,
-      partIds: [...new Set([...(existing.partIds || []), ...(candidate.partIds || [])])]
+      partIds: [...new Set([...(existing.partIds || []), ...(candidate.partIds || [])])],
+      legacyIds: [...new Set([...(existing.legacyIds || []), ...(candidate.legacyIds || [])])]
     });
   });
   return [...unique.values()].map((part) => {
     const identifiers = [part.lcsc && `LCSC ${part.lcsc}`, part.mouser && `Mouser ${part.mouser}`].filter(Boolean);
+    const nameIncludesSupplier = (part.lcsc && part.name.includes(part.lcsc)) || (part.mouser && part.name.includes(part.mouser));
     return {
       id: part.id,
-      name: [part.name, identifiers.length ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
+      name: [part.name, identifiers.length && !nameIncludesSupplier ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
       packageId: part.packageId,
       footprint: part.footprint,
       footprintSource: part.footprintSource,
-      partIds: part.partIds || []
+      partIds: part.partIds || [],
+      legacyIds: part.legacyIds || []
     };
   }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
@@ -851,7 +917,7 @@ function buildOpenPnpPackagesXml(parts) {
 function buildOpenPnpImportScript(parts) {
   const data = JSON.stringify(openPnpParts(parts), null, 2);
   return `// ReelKeeper OpenPnP additive parts importer
-// Generated ${now()}. Existing package and part IDs are never modified.
+// Generated ${now()}. Existing IDs are preserved; legacy descriptions and EasyEDA package assignments may be cleaned up.
 var Part = Java.type("org.openpnp.model.Part");
 var Package = Java.type("org.openpnp.model.Package");
 var FootprintPad = Java.type("org.openpnp.model.Footprint$Pad");
@@ -860,6 +926,8 @@ var JOptionPane = Java.type("javax.swing.JOptionPane");
 var reelKeeperParts = ${data};
 var addedParts = 0;
 var skippedParts = 0;
+var migratedLegacyParts = 0;
+var updatedPartNames = 0;
 var addedPackages = 0;
 var addedFootprints = 0;
 
@@ -893,7 +961,24 @@ reelKeeperParts.forEach(function(item) {
   }
   addFootprint(pkg, item.footprint, item.footprintSource);
 
-  if (config.getPart(item.id) != null) {
+  var existingPart = config.getPart(item.id);
+  if (existingPart == null) {
+    item.legacyIds.some(function(legacyId) {
+      existingPart = config.getPart(legacyId);
+      return existingPart != null;
+    });
+  }
+  if (existingPart != null) {
+    if (String(existingPart.getName() || "") !== item.name) {
+      existingPart.setName(item.name);
+      updatedPartNames++;
+    }
+    var existingPackage = existingPart.getPackage();
+    var existingPackageId = existingPackage == null ? "" : String(existingPackage.getId());
+    if (existingPackageId.indexOf("EE-") === 0 && existingPackageId !== item.packageId) {
+      existingPart.setPackage(pkg);
+      migratedLegacyParts++;
+    }
     skippedParts++;
     return;
   }
@@ -909,6 +994,8 @@ reelKeeperParts.forEach(function(item) {
 config.save();
 var summary = "ReelKeeper import complete.\\nAdded parts: " + addedParts +
   "\\nExisting parts skipped: " + skippedParts +
+  "\\nPart names updated: " + updatedPartNames +
+  "\\nLegacy package names updated: " + migratedLegacyParts +
   "\\nPackages created: " + addedPackages +
   "\\nFootprints added: " + addedFootprints;
 print(summary);
@@ -1019,10 +1106,19 @@ app.post("/api/openpnp/footprints/approve", (req, res) => {
   const store = readStore();
   let updated = 0;
   preview.items.filter((item) => approved.has(item.lcsc)).forEach((item) => {
+    let packageId = item.packageId;
+    const collision = store.parts.find((part) =>
+      part.openPnpFootprint &&
+      openPnpPackageId(part) === packageId &&
+      JSON.stringify(part.openPnpFootprint) !== JSON.stringify(item.footprint)
+    );
+    if (collision) {
+      packageId = `${packageId}-${compactDimension(item.footprint.bodyWidth)}X${compactDimension(item.footprint.bodyHeight)}`;
+    }
     item.partIds.forEach((partId) => {
       const part = store.parts.find((candidate) => candidate.id === partId && String(candidate.lcsc).toUpperCase() === item.lcsc);
       if (!part) return;
-      part.openPnpPackageId = item.packageId;
+      part.openPnpPackageId = packageId;
       part.openPnpFootprint = item.footprint;
       part.openPnpFootprintSource = "EasyEDA";
       part.openPnpFootprintUpdatedAt = now();
