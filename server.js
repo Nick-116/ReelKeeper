@@ -748,20 +748,45 @@ function openPnpElectricalValue(part) {
   return "";
 }
 
+function openPnpCategoryCode(part) {
+  const category = part.category || inferCategory(part);
+  return ({
+    "Resistors": "R",
+    "Capacitors": "C",
+    "Inductors": "L",
+    "Diodes": "D",
+    "LEDs": "LED",
+    "Fuses": "F",
+    "Connectors": "CN",
+    "ICs & Modules": "IC",
+    "Transistors": "Q",
+    "Switches": "SW",
+    "Crystals & Oscillators": "Y",
+    "Uncategorized": "X"
+  })[category] || String(category || "X").replace(/[^A-Z0-9]/gi, "").slice(0, 3).toUpperCase() || "X";
+}
+
 function openPnpPartIdentity(part) {
   const packageId = openPnpPackageId(part);
   const value = openPnpElectricalValue(part);
   const supplierId = part.lcsc || (part.mouser ? `MOUSER-${part.mouser}` : "") || part.mpn;
+  const categoryCode = openPnpCategoryCode(part);
+  let baseId;
+  let baseName;
   if (["Resistors", "Capacitors"].includes(part.category) && value && supplierId) {
     const type = part.category === "Resistors" ? "resistor" : "capacitor";
     const cleanSupplierId = String(supplierId).toUpperCase().replace(/[^A-Z0-9._-]+/g, "-");
-    return {
-      id: `${value}-${packageId}-${cleanSupplierId}`,
-      name: `${value} ${packageId} ${type} - ${cleanSupplierId}`
-    };
+    baseId = `${value}-${packageId}-${cleanSupplierId}`;
+    baseName = `${value} ${packageId} ${type} - ${cleanSupplierId}`;
+  } else {
+    baseId = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
+    baseName = part.name || part.description || part.value || baseId;
   }
-  const id = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
-  return { id, name: part.name || part.description || part.value || id };
+  return {
+    id: String(baseId).toUpperCase().startsWith(`${categoryCode}-`) ? baseId : `${categoryCode}-${baseId}`,
+    name: `${categoryCode} - ${baseName}`,
+    legacyId: baseId
+  };
 }
 
 function openPnpParts(parts) {
@@ -781,7 +806,7 @@ function openPnpParts(parts) {
       footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
       footprintSource: part.openPnpFootprint ? (part.openPnpFootprintSource || "EasyEDA") : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard package" : ""),
       partIds: [part.id],
-      legacyIds: [part.mpn, part.lcsc, part.mouser].filter(Boolean)
+      legacyIds: [...new Set([identity.legacyId, part.mpn, part.lcsc, part.mouser].filter(Boolean))]
     };
     if (!existing) {
       unique.set(key, candidate);

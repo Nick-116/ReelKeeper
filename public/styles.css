@@ -833,6 +833,31 @@ img.component-thumb:hover {
   font-size: 0.88rem;
 }
 
+.category-prefix-reference {
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
+.category-prefix-reference summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.category-prefix-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.45rem 1rem;
+  margin-top: 0.7rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.category-prefix-grid strong {
+  display: inline-block;
+  min-width: 2.2rem;
+  color: var(--ink);
+}
+
 .openpnp-readiness {
   display: grid;
   gap: 0.75rem;
