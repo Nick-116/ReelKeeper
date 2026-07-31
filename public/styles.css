@@ -833,7 +833,58 @@ img.component-thumb:hover {
   font-size: 0.88rem;
 }
 
-#updatePricingBtn.is-loading::before {
+.openpnp-readiness {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.openpnp-readiness.has-issues {
+  border-color: #e2aaa6;
+  background: #fff5f4;
+}
+
+.openpnp-readiness.is-ready {
+  border-color: #9ecfc2;
+  background: #edf8f5;
+}
+
+.openpnp-readiness > span,
+.openpnp-readiness-summary span,
+.openpnp-issue span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.openpnp-readiness-summary,
+.openpnp-issue-list,
+.openpnp-issue > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.openpnp-issue-list {
+  max-height: 18rem;
+  overflow: auto;
+  border-top: 1px solid rgba(164, 80, 73, 0.2);
+}
+
+.openpnp-issue {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) auto minmax(14rem, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid rgba(164, 80, 73, 0.14);
+}
+
+.openpnp-issue:last-child { border-bottom: 0; }
+
+#updatePricingBtn.is-loading::before,
+#fetchEasyEdaFootprintsBtn.is-loading::before {
   content: "";
   display: inline-block;
   width: 0.85rem;
@@ -847,6 +898,60 @@ img.component-thumb:hover {
 }
 
 @keyframes pricing-spin { to { transform: rotate(360deg); } }
+
+.footprint-review-dialog {
+  width: min(900px, calc(100vw - 2rem));
+}
+
+.footprint-review-content,
+.footprint-review-list,
+.footprint-review-details,
+.footprint-review-error {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.footprint-review-list {
+  max-height: min(62vh, 650px);
+  overflow-y: auto;
+}
+
+.footprint-review-row {
+  display: grid;
+  grid-template-columns: 6rem 220px minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.footprint-review-row.has-error {
+  grid-template-columns: 1fr;
+  border-color: #e2aaa6;
+  background: #fff5f4;
+}
+
+.footprint-review-row canvas {
+  width: 220px;
+  height: 140px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.footprint-approval {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 800;
+}
+
+.footprint-review-details span,
+.footprint-review-error span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
 
 .price-pill { color: #245f50; }
 
@@ -1212,6 +1317,19 @@ dialog h3 {
   .bom-match-result {
     grid-template-columns: 1fr;
     gap: 0.2rem;
+  }
+
+  .openpnp-issue {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .footprint-review-row {
+    grid-template-columns: 1fr;
+  }
+
+  .footprint-review-row canvas {
+    width: min(100%, 220px);
   }
 
   .preview-row {

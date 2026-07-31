@@ -5,7 +5,8 @@ const state = {
   pendingImport: null,
   currentBom: null,
   pendingBomMatchLineIndex: null,
-  advancedFilters: {}
+  advancedFilters: {},
+  pendingFootprints: null
 };
 
 const routes = {
@@ -852,6 +853,161 @@ async function loadDocs() {
   $("#apiDocs").innerHTML = `<code>${escapeHtml(JSON.stringify(docs, null, 2))}</code>`;
 }
 
+async function loadOpenPnpReadiness() {
+  const container = $("#openPnpReadiness");
+  if (!container) return;
+  try {
+    const status = await api("/api/export/openpnp/status");
+    if (!status.total) {
+      container.className = "openpnp-readiness is-empty";
+      container.innerHTML = `<strong>No components to export</strong><span>Footprint coverage will appear after components are added.</span>`;
+      return;
+    }
+    const issues = status.items.filter((item) => !item.ready);
+    container.className = `openpnp-readiness ${issues.length ? "has-issues" : "is-ready"}`;
+    container.innerHTML = `
+      <div class="openpnp-readiness-summary">
+        <strong>${issues.length ? `${status.needsReview.toLocaleString()} footprint${status.needsReview === 1 ? "" : "s"} need review` : "All footprints are ready"}</strong>
+        <span>${status.ready.toLocaleString()} of ${status.total.toLocaleString()} components will export with pad geometry.</span>
+      </div>
+      ${issues.length ? `<div class="openpnp-issue-list">${issues.map((item) => `
+        <div class="openpnp-issue">
+          <div><strong>${escapeHtml(item.name || item.id)}</strong><span>${escapeHtml(item.id)}</span></div>
+          <span class="pill">${escapeHtml(item.packageId)}</span>
+          <span>${escapeHtml(item.issue)}</span>
+        </div>
+      `).join("")}</div>` : ""}
+    `;
+  } catch (error) {
+    container.className = "openpnp-readiness has-issues";
+    container.innerHTML = `<strong>Footprint check failed</strong><span>${escapeHtml(error.message)}</span>`;
+  }
+}
+
+function drawFootprintPreview(canvas, footprint) {
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#f7faf9";
+  context.fillRect(0, 0, width, height);
+
+  const padBounds = footprint.pads.map((pad) => ({
+    left: pad.x - Math.max(pad.width, pad.height) / 2,
+    right: pad.x + Math.max(pad.width, pad.height) / 2,
+    top: pad.y - Math.max(pad.width, pad.height) / 2,
+    bottom: pad.y + Math.max(pad.width, pad.height) / 2
+  }));
+  const extentX = Math.max(footprint.bodyWidth / 2, ...padBounds.flatMap((bounds) => [Math.abs(bounds.left), Math.abs(bounds.right)]), 1);
+  const extentY = Math.max(footprint.bodyHeight / 2, ...padBounds.flatMap((bounds) => [Math.abs(bounds.top), Math.abs(bounds.bottom)]), 1);
+  const scale = Math.min((width - 28) / (extentX * 2), (height - 28) / (extentY * 2));
+  const centerX = width / 2;
+  const centerY = height / 2;
+
+  context.strokeStyle = "#71817c";
+  context.lineWidth = 1.5;
+  context.setLineDash([4, 3]);
+  context.strokeRect(
+    centerX - footprint.bodyWidth * scale / 2,
+    centerY - footprint.bodyHeight * scale / 2,
+    footprint.bodyWidth * scale,
+    footprint.bodyHeight * scale
+  );
+  context.setLineDash([]);
+
+  footprint.pads.forEach((pad) => {
+    context.save();
+    context.translate(centerX + pad.x * scale, centerY + pad.y * scale);
+    context.rotate((pad.rotation || 0) * Math.PI / 180);
+    context.fillStyle = pad.name === "1" ? "#d57b35" : "#13856f";
+    context.fillRect(-pad.width * scale / 2, -pad.height * scale / 2, pad.width * scale, pad.height * scale);
+    context.restore();
+  });
+}
+
+function renderFootprintReview() {
+  const pending = state.pendingFootprints;
+  const list = $("#footprintReviewList");
+  const successful = pending.items.filter((item) => item.ok);
+  const failures = pending.items.filter((item) => !item.ok);
+  $("#footprintReviewSummary").textContent = `${successful.length} found · ${failures.length} failed`;
+  list.innerHTML = pending.items.map((item) => {
+    if (!item.ok) {
+      return `<article class="footprint-review-row has-error">
+        <div class="footprint-review-error"><strong>${escapeHtml(item.lcsc)}</strong><span>${escapeHtml(item.partNames.join(", "))}</span><span>${escapeHtml(item.error)}</span></div>
+      </article>`;
+    }
+    return `<article class="footprint-review-row">
+      <label class="footprint-approval"><input type="checkbox" data-approve-footprint="${escapeHtml(item.lcsc)}" checked><span>Approve</span></label>
+      <canvas width="220" height="140" data-footprint-canvas="${escapeHtml(item.lcsc)}" aria-label="Pad preview for ${escapeHtml(item.lcsc)}"></canvas>
+      <div class="footprint-review-details">
+        <strong>${escapeHtml(item.packageName)}</strong>
+        <span>${escapeHtml(item.lcsc)} · ${item.footprint.pads.length.toLocaleString()} pads</span>
+        <span>${formatCompactNumber(item.footprint.bodyWidth)} x ${formatCompactNumber(item.footprint.bodyHeight)} mm body</span>
+        <span>${escapeHtml(item.partNames.join(", "))}</span>
+      </div>
+    </article>`;
+  }).join("") || `<p class="hint">Every LCSC component already has an approved EasyEDA footprint.</p>`;
+  successful.forEach((item) => {
+    const canvas = list.querySelector(`[data-footprint-canvas="${CSS.escape(item.lcsc)}"]`);
+    if (canvas) drawFootprintPreview(canvas, item.footprint);
+  });
+  $("#approveFootprintsBtn").disabled = successful.length === 0;
+}
+
+async function fetchEasyEdaFootprints() {
+  const button = $("#fetchEasyEdaFootprintsBtn");
+  button.disabled = true;
+  button.classList.add("is-loading");
+  const originalText = button.textContent;
+  button.textContent = "Fetching footprints";
+  try {
+    const data = await api("/api/openpnp/footprints/fetch", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    state.pendingFootprints = data;
+    renderFootprintReview();
+    $("#footprintReviewDialog").showModal();
+  } catch (error) {
+    window.alert(`EasyEDA footprint fetch failed: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.classList.remove("is-loading");
+    button.textContent = originalText;
+  }
+}
+
+function closeFootprintReview() {
+  state.pendingFootprints = null;
+  $("#footprintReviewDialog").close();
+}
+
+async function approveEasyEdaFootprints() {
+  if (!state.pendingFootprints) return;
+  const selected = [...$("#footprintReviewList").querySelectorAll("[data-approve-footprint]:checked")]
+    .map((input) => input.dataset.approveFootprint);
+  if (!selected.length) {
+    window.alert("Select at least one footprint to approve.");
+    return;
+  }
+  const button = $("#approveFootprintsBtn");
+  button.disabled = true;
+  try {
+    const result = await api("/api/openpnp/footprints/approve", {
+      method: "POST",
+      body: JSON.stringify({ token: state.pendingFootprints.token, lcscNumbers: selected })
+    });
+    closeFootprintReview();
+    await loadParts();
+    await loadOpenPnpReadiness();
+    window.alert(`${result.updated.toLocaleString()} component footprint${result.updated === 1 ? "" : "s"} approved.`);
+  } catch (error) {
+    window.alert(`Footprint approval failed: ${error.message}`);
+    button.disabled = false;
+  }
+}
+
 async function loadImportHistory() {
   const container = $("#importHistory");
   if (!container) return;
@@ -880,7 +1036,8 @@ function auditActionLabel(type) {
     "order-import": "Order imported",
     "order-import-undo": "Order import undone",
     consume: "Component used",
-    "bom-match": "BOM match saved"
+    "bom-match": "BOM match saved",
+    "footprint-import": "EasyEDA footprint approved"
   })[type] || type;
 }
 
@@ -943,6 +1100,7 @@ function activateView(viewId, options = {}) {
   if (normalized === "settings") {
     loadDocs();
     loadImportHistory();
+    loadOpenPnpReadiness();
   }
 
   if (options.push !== false) {
@@ -963,6 +1121,7 @@ function activateSettingsPanel(panelId) {
   if (panelId === "api") loadDocs();
   if (panelId === "history") loadImportHistory();
   if (panelId === "audit") loadAuditLog();
+  if (panelId === "general") loadOpenPnpReadiness();
 }
 
 function bindEvents() {
@@ -1007,6 +1166,10 @@ function bindEvents() {
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);
   $("#updatePricingBtn")?.addEventListener("click", updateLcscPricing);
+  $("#fetchEasyEdaFootprintsBtn")?.addEventListener("click", fetchEasyEdaFootprints);
+  $("#closeFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
+  $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
+  $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);
   $$(".settings-tab").forEach((button) => {
     button.addEventListener("click", () => activateSettingsPanel(button.dataset.settingsPanel));
   });

@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { randomUUID } = require("crypto");
 const yauzl = require("yauzl");
 const XLSX = require("@e965/xlsx");
 
@@ -8,6 +9,7 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const dataFile = process.env.DATA_FILE || path.join(__dirname, "data", "reelkeeper.json");
 const lcscDetailsCache = new Map();
+const openPnpFootprintPreviews = new Map();
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -523,12 +525,168 @@ function openPnpId(value, fallback) {
 }
 
 function openPnpPackageId(part) {
+  if (part.openPnpPackageId) return openPnpId(part.openPnpPackageId, "UNASSIGNED");
   let packageId = openPnpId(part.package || part.specs?.package, "UNASSIGNED").toUpperCase().replace(/\s+/g, "-");
   if (/^(?:0201|0402|0603|0805|1206|1210|1812|2010|2512)$/.test(packageId)) {
     const prefix = part.category === "Resistors" ? "R" : part.category === "Capacitors" ? "C" : part.category === "Inductors" ? "L" : "";
     packageId = `${prefix}${packageId}`;
   }
   return packageId;
+}
+
+// Nominal land patterns for unambiguous two-terminal EIA chip sizes.
+// Dimensions are millimeters. More complex packages need exact part data.
+const OPENPNP_PASSIVE_FOOTPRINTS = {
+  "0201": { bodyWidth: 0.6, bodyHeight: 0.3, padWidth: 0.3, padHeight: 0.35, padCenter: 0.3 },
+  "0402": { bodyWidth: 1.0, bodyHeight: 0.5, padWidth: 0.5, padHeight: 0.55, padCenter: 0.5 },
+  "0603": { bodyWidth: 1.6, bodyHeight: 0.8, padWidth: 0.7, padHeight: 0.85, padCenter: 0.8 },
+  "0805": { bodyWidth: 2.0, bodyHeight: 1.25, padWidth: 0.9, padHeight: 1.3, padCenter: 1.0 },
+  "1206": { bodyWidth: 3.2, bodyHeight: 1.6, padWidth: 1.2, padHeight: 1.8, padCenter: 1.5 },
+  "1210": { bodyWidth: 3.2, bodyHeight: 2.5, padWidth: 1.2, padHeight: 2.7, padCenter: 1.5 }
+};
+
+function openPnpFootprint(packageId) {
+  const match = String(packageId).match(/^[RCL](0201|0402|0603|0805|1206|1210)$/);
+  if (!match) return null;
+  const dimensions = OPENPNP_PASSIVE_FOOTPRINTS[match[1]];
+  return {
+    units: "Millimeters",
+    bodyWidth: dimensions.bodyWidth,
+    bodyHeight: dimensions.bodyHeight,
+    pads: [
+      { name: "1", x: -dimensions.padCenter, y: 0, width: dimensions.padWidth, height: dimensions.padHeight },
+      { name: "2", x: dimensions.padCenter, y: 0, width: dimensions.padWidth, height: dimensions.padHeight }
+    ]
+  };
+}
+
+function easyEdaPackageId(packageName, packageUuid) {
+  const name = openPnpId(packageName, "PACKAGE").toUpperCase()
+    .replace(/[^A-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 70);
+  return `EE-${name || "PACKAGE"}-${packageUuid.slice(0, 8).toUpperCase()}`;
+}
+
+async function fetchEasyEdaJson(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { "user-agent": "ReelKeeper/1.0 OpenPnP footprint importer" }
+    });
+    if (!response.ok) throw new Error(`EasyEDA returned ${response.status}`);
+    const data = await response.json();
+    if (!data.success || !data.result) throw new Error("EasyEDA returned no component data");
+    return data.result;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("EasyEDA request timed out");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function rotatedPadExtents(pad) {
+  const radians = (pad.rotation || 0) * Math.PI / 180;
+  const halfWidth = (Math.abs(Math.cos(radians)) * pad.width + Math.abs(Math.sin(radians)) * pad.height) / 2;
+  const halfHeight = (Math.abs(Math.sin(radians)) * pad.width + Math.abs(Math.cos(radians)) * pad.height) / 2;
+  return { minX: pad.x - halfWidth, maxX: pad.x + halfWidth, minY: pad.y - halfHeight, maxY: pad.y + halfHeight };
+}
+
+function easyEdaBodySize(packageName, width, height) {
+  const dimensions = String(packageName || "").match(/(?:^|[-_])L(\d+(?:\.\d+)?)[-_]W(\d+(?:\.\d+)?)(?:[-_]|$)/i);
+  if (dimensions) return { bodyWidth: Number(dimensions[1]), bodyHeight: Number(dimensions[2]) };
+  const chip = String(packageName || "").match(/(?:^|[^0-9])(0201|0402|0603|0805|1206|1210)(?:[^0-9]|$)/);
+  if (chip && OPENPNP_PASSIVE_FOOTPRINTS[chip[1]]) {
+    const known = OPENPNP_PASSIVE_FOOTPRINTS[chip[1]];
+    return { bodyWidth: known.bodyWidth, bodyHeight: known.bodyHeight };
+  }
+  return { bodyWidth: width, bodyHeight: height };
+}
+
+function parseEasyEdaFootprint(component, lcsc) {
+  const shapes = component.dataStr?.shape;
+  if (!Array.isArray(shapes)) throw new Error("EasyEDA package has no shape data");
+  const rawPads = shapes.filter((shape) => typeof shape === "string" && shape.startsWith("PAD~")).map((shape) => {
+    const fields = shape.split("~");
+    const pad = {
+      name: String(fields[8] || "").trim(),
+      shape: String(fields[1] || "RECT").toUpperCase(),
+      x: Number(fields[2]),
+      y: Number(fields[3]),
+      width: Number(fields[4]),
+      height: Number(fields[5]),
+      rotation: Number(fields[11] || 0)
+    };
+    if (!pad.name || ![pad.x, pad.y, pad.width, pad.height, pad.rotation].every(Number.isFinite) || pad.width <= 0 || pad.height <= 0) return null;
+    return pad;
+  }).filter(Boolean);
+  if (!rawPads.length) throw new Error("EasyEDA package contains no valid pads");
+  if (rawPads.length > 500) throw new Error("EasyEDA package contains too many pads to import safely");
+
+  const rawBounds = rawPads.map(rotatedPadExtents);
+  const minX = Math.min(...rawBounds.map((bounds) => bounds.minX));
+  const maxX = Math.max(...rawBounds.map((bounds) => bounds.maxX));
+  const minY = Math.min(...rawBounds.map((bounds) => bounds.minY));
+  const maxY = Math.max(...rawBounds.map((bounds) => bounds.maxY));
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const unitToMm = 0.254;
+  const width = (maxX - minX) * unitToMm;
+  const height = (maxY - minY) * unitToMm;
+  if (width <= 0 || height <= 0 || width > 100 || height > 100) throw new Error("EasyEDA package dimensions are outside the supported range");
+
+  const packageName = component.dataStr?.head?.c_para?.package || component.title || `LCSC-${lcsc}`;
+  const body = easyEdaBodySize(packageName, width, height);
+  return {
+    packageName,
+    footprint: {
+      units: "Millimeters",
+      bodyWidth: Number(body.bodyWidth.toFixed(4)),
+      bodyHeight: Number(body.bodyHeight.toFixed(4)),
+      pads: rawPads.map((pad) => ({
+        name: pad.name,
+        x: Number(((pad.x - centerX) * unitToMm).toFixed(5)),
+        y: Number((-(pad.y - centerY) * unitToMm).toFixed(5)),
+        width: Number((pad.width * unitToMm).toFixed(5)),
+        height: Number((pad.height * unitToMm).toFixed(5)),
+        rotation: Number((-pad.rotation).toFixed(3)),
+        roundness: ["OVAL", "ELLIPSE", "ROUND", "CIRCLE"].includes(pad.shape) ? 100 : 0
+      }))
+    }
+  };
+}
+
+async function fetchEasyEdaFootprint(lcsc) {
+  const product = await fetchEasyEdaJson(`https://easyeda.com/api/products/${encodeURIComponent(lcsc)}/components`);
+  const packageUuid = product.dataStr?.head?.puuid || product.packageDetail?.uuid;
+  if (!packageUuid) throw new Error("EasyEDA component has no associated package");
+  const component = await fetchEasyEdaJson(`https://easyeda.com/api/components/${encodeURIComponent(packageUuid)}`);
+  const parsed = parseEasyEdaFootprint(component, lcsc);
+  return {
+    lcsc,
+    packageUuid,
+    packageId: easyEdaPackageId(parsed.packageName, packageUuid),
+    packageName: parsed.packageName,
+    footprint: parsed.footprint,
+    source: "EasyEDA"
+  };
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  const output = new Array(items.length);
+  let next = 0;
+  async function run() {
+    while (next < items.length) {
+      const index = next++;
+      output[index] = await worker(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return output;
 }
 
 function openPnpParts(parts) {
@@ -543,7 +701,9 @@ function openPnpParts(parts) {
       packageId: openPnpPackageId(part),
       quantity: Number(part.quantity || 0),
       lcsc: part.lcsc || "",
-      mouser: part.mouser || ""
+      mouser: part.mouser || "",
+      footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
+      footprintSource: part.openPnpFootprint ? "EasyEDA" : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard passive template" : "")
     };
     if (!existing) {
       unique.set(key, candidate);
@@ -553,7 +713,9 @@ function openPnpParts(parts) {
     unique.set(key, {
       ...preferred,
       lcsc: existing.lcsc || candidate.lcsc,
-      mouser: existing.mouser || candidate.mouser
+      mouser: existing.mouser || candidate.mouser,
+      footprint: existing.footprint || candidate.footprint,
+      footprintSource: existing.footprintSource || candidate.footprintSource
     });
   });
   return [...unique.values()].map((part) => {
@@ -561,7 +723,9 @@ function openPnpParts(parts) {
     return {
       id: part.id,
       name: [part.name, identifiers.length ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
-      packageId: part.packageId
+      packageId: part.packageId,
+      footprint: part.footprint,
+      footprintSource: part.footprintSource
     };
   }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
@@ -577,18 +741,107 @@ function buildOpenPnpPartsXml(parts) {
   return [`<?xml version="1.0" encoding="UTF-8"?>`, `<openpnp-parts>`, ...rows, `</openpnp-parts>`, ""].join("\n");
 }
 
+function openPnpPackages(parts) {
+  const packages = new Map();
+  openPnpParts(parts).forEach((part) => {
+    const existing = packages.get(part.packageId);
+    if (!existing || (!existing.footprint && part.footprint)) {
+      packages.set(part.packageId, { id: part.packageId, footprint: part.footprint, footprintSource: part.footprintSource });
+    }
+  });
+  return [...packages.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+}
+
+function openPnpExportStatus(parts) {
+  const exportedParts = openPnpParts(parts);
+  const items = exportedParts.map((part) => {
+    const footprint = part.footprint;
+    let issue = "";
+    if (!footprint) {
+      if (part.packageId === "UNASSIGNED") {
+        issue = "No package is assigned";
+      } else if (/^(?:0201|0402|0603|0805|1206|1210)$/.test(part.packageId)) {
+        issue = "Passive type is unknown, so the package cannot be mapped safely";
+      } else {
+        issue = `No verified footprint template for ${part.packageId}`;
+      }
+    }
+    return {
+      id: part.id,
+      name: part.name,
+      packageId: part.packageId,
+      ready: Boolean(footprint),
+      source: part.footprintSource || "",
+      issue
+    };
+  });
+  const ready = items.filter((item) => item.ready).length;
+  return {
+    total: items.length,
+    ready,
+    needsReview: items.length - ready,
+    items
+  };
+}
+
+function buildOpenPnpPackagesXml(parts) {
+  const rows = openPnpPackages(parts).map((pkg) => {
+    const description = pkg.footprint ? `${pkg.footprintSource || "ReelKeeper"} footprint` : "Footprint needs review";
+    if (!pkg.footprint) {
+      return `  <package id="${escapeXml(pkg.id)}" description="${description}"><footprint units="Millimeters"/></package>`;
+    }
+    const pads = pkg.footprint.pads.map((pad) => {
+      const optional = [
+        pad.rotation ? ` rotation="${pad.rotation}"` : "",
+        pad.roundness ? ` roundness="${pad.roundness}"` : ""
+      ].join("");
+      return `      <pad name="${escapeXml(pad.name)}" x="${pad.x}" y="${pad.y}" width="${pad.width}" height="${pad.height}"${optional}/>`;
+    });
+    return [
+      `  <package id="${escapeXml(pkg.id)}" description="${description}">`,
+      `    <footprint units="${pkg.footprint.units}" body-width="${pkg.footprint.bodyWidth}" body-height="${pkg.footprint.bodyHeight}">`,
+      ...pads,
+      `    </footprint>`,
+      `  </package>`
+    ].join("\n");
+  });
+  return [`<?xml version="1.0" encoding="UTF-8"?>`, `<openpnp-packages>`, ...rows, `</openpnp-packages>`, ""].join("\n");
+}
+
 function buildOpenPnpImportScript(parts) {
   const data = JSON.stringify(openPnpParts(parts), null, 2);
   return `// ReelKeeper OpenPnP additive parts importer
 // Generated ${now()}. Existing package and part IDs are never modified.
 var Part = Java.type("org.openpnp.model.Part");
 var Package = Java.type("org.openpnp.model.Package");
+var FootprintPad = Java.type("org.openpnp.model.Footprint$Pad");
 var JOptionPane = Java.type("javax.swing.JOptionPane");
 
 var reelKeeperParts = ${data};
 var addedParts = 0;
 var skippedParts = 0;
 var addedPackages = 0;
+var addedFootprints = 0;
+
+function addFootprint(pkg, definition, source) {
+  if (definition == null || pkg.getFootprint().getPads().size() > 0) return;
+  var footprint = pkg.getFootprint();
+  footprint.setBodyWidth(definition.bodyWidth);
+  footprint.setBodyHeight(definition.bodyHeight);
+  definition.pads.forEach(function(item) {
+    var pad = new FootprintPad();
+    pad.setName(item.name);
+    pad.setX(item.x);
+    pad.setY(item.y);
+    pad.setWidth(item.width);
+    pad.setHeight(item.height);
+    pad.setRotation(item.rotation || 0);
+    pad.setRoundness(item.roundness || 0);
+    footprint.addPad(pad);
+  });
+  pkg.setDescription(source ? source + " footprint" : "ReelKeeper footprint");
+  addedFootprints++;
+}
 
 reelKeeperParts.forEach(function(item) {
   var pkg = config.getPackage(item.packageId);
@@ -598,6 +851,7 @@ reelKeeperParts.forEach(function(item) {
     config.addPackage(pkg);
     addedPackages++;
   }
+  addFootprint(pkg, item.footprint, item.footprintSource);
 
   if (config.getPart(item.id) != null) {
     skippedParts++;
@@ -615,7 +869,8 @@ reelKeeperParts.forEach(function(item) {
 config.save();
 var summary = "ReelKeeper import complete.\\nAdded parts: " + addedParts +
   "\\nExisting parts skipped: " + skippedParts +
-  "\\nPackages created: " + addedPackages;
+  "\\nPackages created: " + addedPackages +
+  "\\nFootprints added: " + addedFootprints;
 print(summary);
 JOptionPane.showMessageDialog(gui, summary, "ReelKeeper Import", JOptionPane.INFORMATION_MESSAGE);
 `;
@@ -630,6 +885,87 @@ app.get("/api/export/openpnp/parts.xml", (_req, res) => {
   res.setHeader("Content-Type", "application/xml; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="reelkeeper-openpnp-parts.xml"');
   res.send(buildOpenPnpPartsXml(store.parts));
+});
+
+app.get("/api/export/openpnp/packages.xml", (_req, res) => {
+  const store = readStore();
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="reelkeeper-openpnp-packages.xml"');
+  res.send(buildOpenPnpPackagesXml(store.parts));
+});
+
+app.get("/api/export/openpnp/status", (_req, res) => {
+  const store = readStore();
+  res.json(openPnpExportStatus(store.parts));
+});
+
+app.post("/api/openpnp/footprints/fetch", async (req, res) => {
+  const store = readStore();
+  const requestedIds = Array.isArray(req.body?.partIds) ? new Set(req.body.partIds.map(String)) : null;
+  const candidates = store.parts.filter((part) =>
+    part.lcsc &&
+    (!requestedIds || requestedIds.has(part.id)) &&
+    (req.body?.refresh === true || !part.openPnpFootprint)
+  );
+  const groups = new Map();
+  candidates.forEach((part) => {
+    const lcsc = String(part.lcsc).trim().toUpperCase();
+    if (!groups.has(lcsc)) groups.set(lcsc, { lcsc, partIds: [], partNames: [] });
+    groups.get(lcsc).partIds.push(part.id);
+    groups.get(lcsc).partNames.push(part.name || part.mpn || lcsc);
+  });
+
+  const results = await mapWithConcurrency([...groups.values()], 4, async (group) => {
+    try {
+      return { ok: true, ...group, ...(await fetchEasyEdaFootprint(group.lcsc)) };
+    } catch (error) {
+      return { ok: false, ...group, error: error.message };
+    }
+  });
+  const token = randomUUID();
+  openPnpFootprintPreviews.set(token, {
+    createdAt: Date.now(),
+    items: results.filter((item) => item.ok)
+  });
+  for (const [previewToken, preview] of openPnpFootprintPreviews) {
+    if (Date.now() - preview.createdAt > 30 * 60 * 1000) openPnpFootprintPreviews.delete(previewToken);
+  }
+  res.json({ token, items: results, skipped: store.parts.filter((part) => part.lcsc && part.openPnpFootprint).length });
+});
+
+app.post("/api/openpnp/footprints/approve", (req, res) => {
+  const preview = openPnpFootprintPreviews.get(String(req.body?.token || ""));
+  if (!preview || Date.now() - preview.createdAt > 30 * 60 * 1000) {
+    return res.status(400).json({ error: "Footprint preview expired. Fetch the EasyEDA footprints again." });
+  }
+  const approved = new Set(Array.isArray(req.body?.lcscNumbers) ? req.body.lcscNumbers.map((value) => String(value).toUpperCase()) : []);
+  const store = readStore();
+  let updated = 0;
+  preview.items.filter((item) => approved.has(item.lcsc)).forEach((item) => {
+    item.partIds.forEach((partId) => {
+      const part = store.parts.find((candidate) => candidate.id === partId && String(candidate.lcsc).toUpperCase() === item.lcsc);
+      if (!part) return;
+      part.openPnpPackageId = item.packageId;
+      part.openPnpFootprint = item.footprint;
+      part.openPnpFootprintSource = "EasyEDA";
+      part.openPnpFootprintUpdatedAt = now();
+      part.updatedAt = now();
+      updated++;
+    });
+  });
+  if (updated) {
+    store.movements.unshift({
+      id: `move_${Date.now()}`,
+      type: "footprint-import",
+      partName: `${updated} component${updated === 1 ? "" : "s"}`,
+      delta: 0,
+      source: "EasyEDA",
+      at: now()
+    });
+    writeStore(store);
+  }
+  openPnpFootprintPreviews.delete(String(req.body.token));
+  res.json({ updated });
 });
 
 app.get("/api/export/openpnp/import-script.js", (_req, res) => {
@@ -960,6 +1296,10 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
       { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
       { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
+      { method: "GET", path: "/export/openpnp/packages.xml", description: "Download OpenPnP packages.xml with generated footprints for standard two-terminal passive packages." },
+      { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },
+      { method: "POST", path: "/openpnp/footprints/fetch", description: "Fetch EasyEDA footprint previews for inventory components with LCSC numbers." },
+      { method: "POST", path: "/openpnp/footprints/approve", description: "Approve fetched EasyEDA footprint previews using the temporary token and selected LCSC numbers." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],

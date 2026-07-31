@@ -187,13 +187,18 @@
             <div class="panel openpnp-export">
               <div>
                 <h3>OpenPnP library export</h3>
-                <p class="hint">Download a complete parts.xml snapshot, or use the additive script to create only packages and parts that do not already exist in OpenPnP.</p>
+                <p class="hint">Download parts and package footprints, or use the additive script to add missing OpenPnP records without replacing configured footprints.</p>
               </div>
               <div class="openpnp-export-actions">
+                <button id="fetchEasyEdaFootprintsBtn">Fetch EasyEDA footprints</button>
                 <a class="button-link" href="/api/export/openpnp/parts.xml" download><span class="download-icon" aria-hidden="true"></span>Export parts.xml</a>
+                <a class="button-link" href="/api/export/openpnp/packages.xml" download><span class="download-icon" aria-hidden="true"></span>Export packages.xml</a>
                 <a class="button-link primary" href="/api/export/openpnp/import-script.js" download><span class="download-icon" aria-hidden="true"></span>Export import script</a>
               </div>
               <p class="openpnp-export-note">Put the script in OpenPnP's scripts directory, then run <strong>ReelKeeper_Import_Parts.js</strong> from the Scripts menu.</p>
+              <div class="openpnp-readiness" id="openPnpReadiness" aria-live="polite">
+                <p class="hint">Checking footprint coverage...</p>
+              </div>
             </div>
             <div class="panel danger-zone">
               <div>
@@ -337,6 +342,24 @@
           <input id="bomMatchSearchInput" type="search" placeholder="Name, LCSC, MPN, value, or package" autocomplete="off">
         </label>
         <div class="bom-match-results" id="bomMatchResults"></div>
+      </div>
+    </dialog>
+    <dialog id="footprintReviewDialog" class="footprint-review-dialog">
+      <div class="footprint-review-content">
+        <header>
+          <div>
+            <h3>Review EasyEDA footprints</h3>
+            <span class="meta" id="footprintReviewSummary"></span>
+          </div>
+          <button type="button" class="icon-button" id="closeFootprintReviewBtn" aria-label="Close">x</button>
+        </header>
+        <p class="hint">Inspect each pad layout before approving it for OpenPnP export.</p>
+        <div class="footprint-review-list" id="footprintReviewList"></div>
+        <footer>
+          <span></span>
+          <button type="button" id="cancelFootprintReviewBtn">Cancel</button>
+          <button type="button" class="primary" id="approveFootprintsBtn">Approve selected</button>
+        </footer>
       </div>
     </dialog>
     <div class="loading-overlay hidden" id="importLoadingOverlay" role="status" aria-live="polite" aria-label="Adding components">
