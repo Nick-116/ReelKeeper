@@ -21,7 +21,8 @@ function seedData() {
     parts: [],
     movements: [],
     importBatches: [],
-    bomMatchRules: []
+    bomMatchRules: [],
+    openPnpNozzleAssignments: {}
   };
 }
 
@@ -39,6 +40,7 @@ function readStore() {
   store.movements ||= [];
   store.importBatches ||= [];
   store.bomMatchRules ||= [];
+  store.openPnpNozzleAssignments ||= {};
   return store;
 }
 
@@ -586,6 +588,15 @@ const OPENPNP_COMMON_PACKAGES = {
   }
 };
 
+const OPENPNP_NOZZLE_SIZES = ["40", "65", "140", "220", "400", "750"];
+
+function recommendedOpenPnpNozzleSize(footprint) {
+  if (!footprint) return "";
+  const target = Math.min(Number(footprint.bodyWidth), Number(footprint.bodyHeight)) * 0.65;
+  const candidates = OPENPNP_NOZZLE_SIZES.filter((size) => Number(size) / 100 <= target);
+  return candidates.at(-1) || "40";
+}
+
 function openPnpFootprint(packageId) {
   if (OPENPNP_COMMON_PACKAGES[packageId]) return OPENPNP_COMMON_PACKAGES[packageId];
   const match = String(packageId).match(/^[RCL](0201|0402|0603|0805|1206|1210)$/);
@@ -789,7 +800,7 @@ function openPnpPartIdentity(part) {
   };
 }
 
-function openPnpParts(parts) {
+function openPnpParts(parts, nozzleAssignments = {}) {
   const unique = new Map();
   parts.forEach((part) => {
     const identity = openPnpPartIdentity(part);
@@ -808,6 +819,7 @@ function openPnpParts(parts) {
       partIds: [part.id],
       legacyIds: [...new Set([identity.legacyId, part.mpn, part.lcsc, part.mouser].filter(Boolean))]
     };
+    candidate.nozzleSize = nozzleAssignments[candidate.packageId] || "";
     if (!existing) {
       unique.set(key, candidate);
       return;
@@ -833,7 +845,8 @@ function openPnpParts(parts) {
       footprint: part.footprint,
       footprintSource: part.footprintSource,
       partIds: part.partIds || [],
-      legacyIds: part.legacyIds || []
+      legacyIds: part.legacyIds || [],
+      nozzleSize: part.nozzleSize || ""
     };
   }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
@@ -849,12 +862,12 @@ function buildOpenPnpPartsXml(parts) {
   return [`<?xml version="1.0" encoding="UTF-8"?>`, `<openpnp-parts>`, ...rows, `</openpnp-parts>`, ""].join("\n");
 }
 
-function openPnpPackages(parts) {
+function openPnpPackages(parts, nozzleAssignments = {}) {
   const packages = new Map();
-  openPnpParts(parts).forEach((part) => {
+  openPnpParts(parts, nozzleAssignments).forEach((part) => {
     const existing = packages.get(part.packageId);
     if (!existing || (!existing.footprint && part.footprint)) {
-      packages.set(part.packageId, { id: part.packageId, footprint: part.footprint, footprintSource: part.footprintSource });
+      packages.set(part.packageId, { id: part.packageId, footprint: part.footprint, footprintSource: part.footprintSource, nozzleSize: part.nozzleSize });
     }
   });
   return [...packages.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
@@ -939,8 +952,8 @@ function buildOpenPnpPackagesXml(parts) {
   return [`<?xml version="1.0" encoding="UTF-8"?>`, `<openpnp-packages>`, ...rows, `</openpnp-packages>`, ""].join("\n");
 }
 
-function buildOpenPnpImportScript(parts) {
-  const data = JSON.stringify(openPnpParts(parts), null, 2);
+function buildOpenPnpImportScript(parts, nozzleAssignments = {}) {
+  const data = JSON.stringify(openPnpParts(parts, nozzleAssignments), null, 2);
   return `// ReelKeeper OpenPnP additive parts importer
 // Generated ${now()}. Existing IDs are preserved; legacy descriptions and EasyEDA package assignments may be cleaned up.
 var Part = Java.type("org.openpnp.model.Part");
@@ -955,6 +968,57 @@ var migratedLegacyParts = 0;
 var updatedPartNames = 0;
 var addedPackages = 0;
 var addedFootprints = 0;
+var nozzleCompatibilitiesAdded = 0;
+var nozzleTips = [];
+var machineNozzleTips = config.getMachine().getNozzleTips();
+for (var nozzleIndex = 0; nozzleIndex < machineNozzleTips.size(); nozzleIndex++) {
+  nozzleTips.push(machineNozzleTips.get(nozzleIndex));
+}
+var tipByReelKeeperSize = {};
+
+function nozzleTipLabel(tip) {
+  var name = String(tip.getName() || tip.getId());
+  var id = String(tip.getId());
+  return name === id ? id : name + " [" + id + "]";
+}
+
+function existingTipForSize(size) {
+  for (var partIndex = 0; partIndex < reelKeeperParts.length; partIndex++) {
+    var item = reelKeeperParts[partIndex];
+    if (item.nozzleSize !== size) continue;
+    var existingPackage = config.getPackage(item.packageId);
+    if (existingPackage == null) continue;
+    var compatible = existingPackage.getCompatibleNozzleTips().iterator();
+    if (compatible.hasNext()) return compatible.next();
+  }
+  return null;
+}
+
+function selectNozzleTip(size) {
+  if (tipByReelKeeperSize[size] !== undefined) return tipByReelKeeperSize[size];
+  var selected = existingTipForSize(size);
+  if (selected == null) {
+    var numericMatches = nozzleTips.filter(function(tip) {
+      var numbers = nozzleTipLabel(tip).match(/\\d+/g) || [];
+      return numbers.some(function(number) { return Number(number) === Number(size); });
+    });
+    if (numericMatches.length === 1) selected = numericMatches[0];
+  }
+  if (selected == null && nozzleTips.length > 0) {
+    var labels = nozzleTips.map(nozzleTipLabel);
+    var choices = Java.to(labels, "java.lang.Object[]");
+    var answer = JOptionPane.showInputDialog(gui,
+      "ReelKeeper nozzle " + size + " needs an OpenPnP nozzle tip.\\nSelect the matching configured tip:",
+      "Map ReelKeeper Nozzle " + size,
+      JOptionPane.QUESTION_MESSAGE, null, choices, choices[0]);
+    if (answer != null) {
+      var selectedIndex = labels.indexOf(String(answer));
+      if (selectedIndex >= 0) selected = nozzleTips[selectedIndex];
+    }
+  }
+  tipByReelKeeperSize[size] = selected;
+  return selected;
+}
 
 function addFootprint(pkg, definition, source) {
   if (definition == null || pkg.getFootprint().getPads().size() > 0) return;
@@ -985,6 +1049,13 @@ reelKeeperParts.forEach(function(item) {
     addedPackages++;
   }
   addFootprint(pkg, item.footprint, item.footprintSource);
+  if (item.nozzleSize) {
+    var selectedTip = selectNozzleTip(item.nozzleSize);
+    if (selectedTip != null && !pkg.getCompatibleNozzleTips().contains(selectedTip)) {
+      pkg.addCompatibleNozzleTip(selectedTip);
+      nozzleCompatibilitiesAdded++;
+    }
+  }
 
   var existingPart = config.getPart(item.id);
   if (existingPart == null) {
@@ -1022,7 +1093,8 @@ var summary = "ReelKeeper import complete.\\nAdded parts: " + addedParts +
   "\\nPart names updated: " + updatedPartNames +
   "\\nLegacy package names updated: " + migratedLegacyParts +
   "\\nPackages created: " + addedPackages +
-  "\\nFootprints added: " + addedFootprints;
+  "\\nFootprints added: " + addedFootprints +
+  "\\nNozzle compatibilities added: " + nozzleCompatibilitiesAdded;
 print(summary);
 JOptionPane.showMessageDialog(gui, summary, "ReelKeeper Import", JOptionPane.INFORMATION_MESSAGE);
 `;
@@ -1086,6 +1158,50 @@ app.post("/api/openpnp/packages/assign", (req, res) => {
   });
   writeStore(store);
   res.json({ updated, packageId: knownPackage.id });
+});
+
+app.get("/api/openpnp/nozzles", (_req, res) => {
+  const store = readStore();
+  const packages = openPnpPackages(store.parts, store.openPnpNozzleAssignments).map((pkg) => ({
+    packageId: pkg.id,
+    assignedSize: store.openPnpNozzleAssignments[pkg.id] || "",
+    recommendedSize: recommendedOpenPnpNozzleSize(pkg.footprint),
+    bodyWidth: pkg.footprint?.bodyWidth || null,
+    bodyHeight: pkg.footprint?.bodyHeight || null
+  }));
+  res.json({ sizes: OPENPNP_NOZZLE_SIZES, packages });
+});
+
+app.post("/api/openpnp/nozzles/assign", (req, res) => {
+  const packageId = String(req.body?.packageId || "");
+  const size = String(req.body?.size || "");
+  if (!packageId) return res.status(400).json({ error: "Package is required." });
+  if (size && !OPENPNP_NOZZLE_SIZES.includes(size)) return res.status(400).json({ error: "Unknown ReelKeeper nozzle size." });
+  const store = readStore();
+  const available = openPnpPackages(store.parts, store.openPnpNozzleAssignments).some((pkg) => pkg.id === packageId);
+  if (!available) return res.status(404).json({ error: "Package not found in the component library." });
+  if (size) store.openPnpNozzleAssignments[packageId] = size;
+  else delete store.openPnpNozzleAssignments[packageId];
+  store.movements.unshift({ id: `move_${Date.now()}`, type: "nozzle-assign", partName: packageId, delta: 0, source: size ? `Nozzle ${size}` : "Nozzle cleared", at: now() });
+  writeStore(store);
+  res.json({ packageId, size });
+});
+
+app.post("/api/openpnp/nozzles/auto", (_req, res) => {
+  const store = readStore();
+  let updated = 0;
+  openPnpPackages(store.parts, store.openPnpNozzleAssignments).forEach((pkg) => {
+    if (store.openPnpNozzleAssignments[pkg.id]) return;
+    const size = recommendedOpenPnpNozzleSize(pkg.footprint);
+    if (!size) return;
+    store.openPnpNozzleAssignments[pkg.id] = size;
+    updated++;
+  });
+  if (updated) {
+    store.movements.unshift({ id: `move_${Date.now()}`, type: "nozzle-auto", partName: `${updated} package${updated === 1 ? "" : "s"}`, delta: 0, source: "Automatic recommendation", at: now() });
+    writeStore(store);
+  }
+  res.json({ updated });
 });
 
 app.post("/api/openpnp/footprints/fetch", async (req, res) => {
@@ -1170,7 +1286,7 @@ app.get("/api/export/openpnp/import-script.js", (_req, res) => {
   const store = readStore();
   res.setHeader("Content-Type", "text/javascript; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="ReelKeeper_Import_Parts.js"');
-  res.send(buildOpenPnpImportScript(store.parts));
+  res.send(buildOpenPnpImportScript(store.parts, store.openPnpNozzleAssignments));
 });
 
 app.get("/api/parts", (req, res) => {
@@ -1498,6 +1614,9 @@ app.get("/api/docs", (_req, res) => {
       { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },
       { method: "GET", path: "/openpnp/packages/known", description: "List built-in and inventory package footprints available for manual mapping." },
       { method: "POST", path: "/openpnp/packages/assign", description: "Assign a known package footprint to one or more inventory component IDs." },
+      { method: "GET", path: "/openpnp/nozzles", description: "List OpenPnP packages with ReelKeeper nozzle size assignments and recommendations." },
+      { method: "POST", path: "/openpnp/nozzles/assign", description: "Assign one ReelKeeper nozzle size to an OpenPnP package." },
+      { method: "POST", path: "/openpnp/nozzles/auto", description: "Assign conservative nozzle size recommendations to currently unassigned packages." },
       { method: "POST", path: "/openpnp/footprints/fetch", description: "Fetch EasyEDA footprint previews for inventory components with LCSC numbers." },
       { method: "POST", path: "/openpnp/footprints/approve", description: "Approve fetched EasyEDA footprint previews using the temporary token and selected LCSC numbers." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },

@@ -914,9 +914,62 @@ async function assignKnownOpenPnpPackage(index, button) {
     });
     await loadParts();
     await loadOpenPnpReadiness();
+    await loadNozzleAssignments();
     window.alert(`${result.updated.toLocaleString()} component record${result.updated === 1 ? "" : "s"} mapped to ${result.packageId}.`);
   } catch (error) {
     window.alert(`Package mapping failed: ${error.message}`);
+    button.disabled = false;
+  }
+}
+
+async function loadNozzleAssignments() {
+  const container = $("#nozzleAssignmentList");
+  if (!container) return;
+  try {
+    const data = await api("/api/openpnp/nozzles");
+    container.innerHTML = data.packages.map((pkg) => `
+      <div class="nozzle-assignment-row">
+        <div>
+          <strong>${escapeHtml(pkg.packageId)}</strong>
+          <span>${pkg.bodyWidth && pkg.bodyHeight ? `${formatCompactNumber(pkg.bodyWidth)} x ${formatCompactNumber(pkg.bodyHeight)} mm` : "Dimensions unavailable"}</span>
+        </div>
+        ${pkg.recommendedSize ? `<span class="nozzle-recommendation">Suggested ${escapeHtml(pkg.recommendedSize)}</span>` : `<span></span>`}
+        <select data-nozzle-package="${escapeHtml(pkg.packageId)}" aria-label="Nozzle size for ${escapeHtml(pkg.packageId)}">
+          <option value="">Unassigned</option>
+          ${data.sizes.map((size) => `<option value="${size}" ${size === pkg.assignedSize ? "selected" : ""}>${size}</option>`).join("")}
+        </select>
+      </div>
+    `).join("") || `<p class="hint">No component packages are available yet.</p>`;
+  } catch (error) {
+    container.innerHTML = `<p class="hint">Could not load nozzle assignments: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function assignNozzleSize(select) {
+  select.disabled = true;
+  try {
+    await api("/api/openpnp/nozzles/assign", {
+      method: "POST",
+      body: JSON.stringify({ packageId: select.dataset.nozzlePackage, size: select.value })
+    });
+  } catch (error) {
+    window.alert(`Nozzle assignment failed: ${error.message}`);
+    await loadNozzleAssignments();
+  } finally {
+    select.disabled = false;
+  }
+}
+
+async function autoAssignNozzles() {
+  const button = $("#autoAssignNozzlesBtn");
+  button.disabled = true;
+  try {
+    const result = await api("/api/openpnp/nozzles/auto", { method: "POST", body: "{}" });
+    await loadNozzleAssignments();
+    window.alert(`${result.updated.toLocaleString()} unassigned package${result.updated === 1 ? "" : "s"} received a suggested nozzle size.`);
+  } catch (error) {
+    window.alert(`Automatic nozzle assignment failed: ${error.message}`);
+  } finally {
     button.disabled = false;
   }
 }
@@ -1038,6 +1091,7 @@ async function approveEasyEdaFootprints() {
     closeFootprintReview();
     await loadParts();
     await loadOpenPnpReadiness();
+    await loadNozzleAssignments();
     window.alert(`${result.updated.toLocaleString()} component footprint${result.updated === 1 ? "" : "s"} approved.`);
   } catch (error) {
     window.alert(`Footprint approval failed: ${error.message}`);
@@ -1075,7 +1129,9 @@ function auditActionLabel(type) {
     consume: "Component used",
     "bom-match": "BOM match saved",
     "footprint-import": "EasyEDA footprint approved",
-    "footprint-map": "OpenPnP package mapped"
+    "footprint-map": "OpenPnP package mapped",
+    "nozzle-assign": "Nozzle size assigned",
+    "nozzle-auto": "Nozzle sizes recommended"
   })[type] || type;
 }
 
@@ -1139,6 +1195,7 @@ function activateView(viewId, options = {}) {
     loadDocs();
     loadImportHistory();
     loadOpenPnpReadiness();
+    loadNozzleAssignments();
   }
 
   if (options.push !== false) {
@@ -1160,6 +1217,7 @@ function activateSettingsPanel(panelId) {
   if (panelId === "history") loadImportHistory();
   if (panelId === "audit") loadAuditLog();
   if (panelId === "general") loadOpenPnpReadiness();
+  if (panelId === "general") loadNozzleAssignments();
 }
 
 function bindEvents() {
@@ -1208,6 +1266,11 @@ function bindEvents() {
   $("#closeFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);
+  $("#autoAssignNozzlesBtn")?.addEventListener("click", autoAssignNozzles);
+  $("#nozzleAssignmentList")?.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-nozzle-package]");
+    if (select) assignNozzleSize(select);
+  });
   $("#openPnpReadiness")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-assign-package]");
     if (button) assignKnownOpenPnpPackage(Number(button.dataset.assignPackage), button);

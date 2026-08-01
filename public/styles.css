@@ -858,6 +858,56 @@ img.component-thumb:hover {
   color: var(--ink);
 }
 
+.nozzle-assignment-section {
+  display: grid;
+  gap: 0.7rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.85rem;
+}
+
+.nozzle-assignment-section .panel-title-row {
+  margin: 0;
+}
+
+.nozzle-assignment-section .hint {
+  margin: 0;
+}
+
+.nozzle-assignment-list {
+  display: grid;
+  max-height: 22rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.nozzle-assignment-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) auto 7rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.nozzle-assignment-row > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.nozzle-assignment-row > div span,
+.nozzle-recommendation {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.nozzle-recommendation {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  background: #edf8f5;
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
 .openpnp-readiness {
   display: grid;
   gap: 0.75rem;
@@ -1366,6 +1416,15 @@ dialog h3 {
 
   .footprint-review-row {
     grid-template-columns: 1fr;
+  }
+
+  .nozzle-assignment-section .panel-title-row,
+  .nozzle-assignment-row {
+    grid-template-columns: 1fr;
+  }
+
+  .nozzle-assignment-row select {
+    width: 100%;
   }
 
   .footprint-review-row canvas {
