@@ -164,7 +164,7 @@
           </header>
           <div class="openpnp-tabs" role="tablist" aria-label="OpenPnP sections">
             <button class="openpnp-tab active" data-openpnp-panel="library">Library Export</button>
-            <button class="openpnp-tab" data-openpnp-panel="packages">Packages &amp; Heights</button>
+            <button class="openpnp-tab" data-openpnp-panel="packages">Packages &amp; Part Heights</button>
             <button class="openpnp-tab" data-openpnp-panel="nozzles">Nozzle Setup</button>
           </div>
           <div class="openpnp-panel active" id="openpnp-library">
@@ -205,7 +205,10 @@
                   <h3>Packages and part heights</h3>
                   <p class="hint">Review footprint coverage, placement heights, and packages ReelKeeper cannot identify confidently. Package-based heights are starting values and should be checked against the component datasheet.</p>
                 </div>
-                <button id="reviewPartHeightsBtn">Review component heights</button>
+                <div class="openpnp-export-actions">
+                  <button id="reviewPartHeightsBtn">Set Part Heights</button>
+                  <button class="danger" id="deleteAllHeightsBtn">Delete all part heights</button>
+                </div>
               </div>
               <div class="openpnp-readiness" id="openPnpReadiness" aria-live="polite">
                 <p class="hint">Checking footprint coverage...</p>
@@ -441,7 +444,7 @@
           <div class="datasheet-viewer" id="heightDatasheetViewer"></div>
           <aside class="height-review-controls">
             <div>
-              <span class="field-label">Extracted evidence</span>
+              <span class="field-label" id="heightEvidenceLabel">Extracted evidence</span>
               <p id="heightReviewEvidence"></p>
             </div>
             <div class="current-height" id="heightReviewCurrent"></div>

@@ -802,6 +802,10 @@ img.component-thumb:hover {
   gap: 0.65rem;
 }
 
+#openpnp-packages .openpnp-export-actions button {
+  white-space: nowrap;
+}
+
 .button-link {
   display: inline-flex;
   align-items: center;
@@ -1541,8 +1545,14 @@ dialog h3 {
   }
 
   .nozzle-assignment-section .panel-title-row,
+  #openpnp-packages .panel-title-row,
   .nozzle-assignment-row {
     grid-template-columns: 1fr;
+  }
+
+  #openpnp-packages .panel-title-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .nozzle-assignment-row select {

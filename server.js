@@ -10,6 +10,7 @@ const port = Number(process.env.PORT || 3000);
 const dataFile = process.env.DATA_FILE || path.join(__dirname, "data", "reelkeeper.json");
 const lcscDetailsCache = new Map();
 const openPnpFootprintPreviews = new Map();
+const heightReviewJobs = new Map();
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -42,7 +43,7 @@ function readStore() {
   store.bomMatchRules ||= [];
   store.openPnpNozzleAssignments ||= {};
   store.parts.forEach((part) => {
-    if (Number(part.heightMm) > 0) return;
+    if (Number(part.heightMm) > 0 || part.heightDefaultSuppressed) return;
     part.heightMm = defaultPartHeightMm(part);
     part.heightSource = part.heightMm ? "ReelKeeper package default" : "";
   });
@@ -80,6 +81,9 @@ function normalizePart(input, existing = {}) {
     minimum: Math.max(0, number(input.minimum, existing.minimum || 0)),
     location: text(input.location) || existing.location || "",
     photoUrl: text(input.photoUrl) || existing.photoUrl || "",
+    datasheetUrl: text(input.datasheetUrl) || existing.datasheetUrl || "",
+    datasheetFile: text(input.datasheetFile) || existing.datasheetFile || "",
+    datasheetUpdatedAt: text(input.datasheetUpdatedAt) || existing.datasheetUpdatedAt || "",
     priceBreaks: priceBreaks
       .map((item) => ({ quantity: Math.max(1, number(item.quantity || item.ladder, 1)), unitPrice: number(item.unitPrice ?? item.usdPrice) }))
       .filter((item) => item.unitPrice > 0)
@@ -97,9 +101,14 @@ function normalizePart(input, existing = {}) {
   if (Number.isFinite(suppliedHeight) && suppliedHeight > 0) {
     base.heightMm = suppliedHeight;
     base.heightSource = text(input.heightSource) || "Manual";
+    base.heightDefaultSuppressed = false;
   } else if (Number.isFinite(existingHeight) && existingHeight > 0) {
     base.heightMm = existingHeight;
     base.heightSource = existing.heightSource || "Manual";
+  } else if (existing.heightDefaultSuppressed) {
+    base.heightMm = 0;
+    base.heightSource = "";
+    base.heightDefaultSuppressed = true;
   } else {
     base.heightMm = defaultPartHeightMm(base);
     base.heightSource = base.heightMm ? "ReelKeeper package default" : "";
@@ -581,6 +590,37 @@ async function downloadDatasheet(part) {
   return { fileName, filePath };
 }
 
+async function ensurePartDatasheet(part, details = null) {
+  if (!part.datasheetUrl && details?.datasheetUrl) part.datasheetUrl = details.datasheetUrl;
+  if (!part.datasheetUrl && part.lcsc) {
+    const lcscDetails = await lookupLcscDetails(part.lcsc);
+    if (lcscDetails.datasheetUrl) part.datasheetUrl = lcscDetails.datasheetUrl;
+  }
+  const downloaded = await downloadDatasheet(part);
+  part.datasheetFile = downloaded.fileName;
+  part.datasheetUpdatedAt = now();
+  return downloaded;
+}
+
+async function translateEvidenceToEnglish(text) {
+  const value = String(text || "").trim();
+  if (!value || !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(value)) return { text: value, translated: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const url = new URL("https://translate.googleapis.com/translate_a/single");
+    url.search = new URLSearchParams({ client: "gtx", sl: "auto", tl: "en", dt: "t", q: value.slice(0, 3500) });
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) throw new Error(`Translation returned ${response.status}`);
+    const data = await response.json();
+    const translated = Array.isArray(data?.[0]) ? data[0].map((item) => item?.[0] || "").join("") : "";
+    return translated ? { text: translated, translated: true } : { text: value, translated: false };
+  } catch (_error) {
+    return { text: value, translated: false };
+  }
+}
+
 function heightEvidence(pageText) {
   const normalized = String(pageText || "").replace(/\s+/g, " ").trim();
   const patterns = [
@@ -612,14 +652,18 @@ async function inspectDatasheet(filePath) {
     const score = ["mechanical", "dimensions", "package", "outline", "recommended land pattern"]
       .reduce((total, keyword) => total + (text.toLowerCase().includes(keyword) ? 1 : 0), 0);
     const candidate = heightEvidence(text);
-    if (candidate) return { page: pageNumber, pages: pdf.numPages, ...candidate, confidence: "Explicit height label" };
+    if (candidate) {
+      const english = await translateEvidenceToEnglish(candidate.evidence);
+      return { page: pageNumber, pages: pdf.numPages, ...candidate, evidenceEnglish: english.text, evidenceTranslated: english.translated, confidence: "Explicit height label" };
+    }
     if (score > bestScore) {
       bestPage = pageNumber;
       bestScore = score;
       bestEvidence = text.slice(0, 320);
     }
   }
-  return { page: bestPage, pages: pdf.numPages, heightMm: null, evidence: bestEvidence, confidence: "Manual review required" };
+  const english = await translateEvidenceToEnglish(bestEvidence);
+  return { page: bestPage, pages: pdf.numPages, heightMm: null, evidence: bestEvidence, evidenceEnglish: english.text, evidenceTranslated: english.translated, confidence: "Manual review required" };
 }
 
 function openPnpId(value, fallback) {
@@ -971,8 +1015,8 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       mouser: part.mouser || "",
       footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
       footprintSource: part.openPnpFootprint ? (part.openPnpFootprintSource || "EasyEDA") : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard package" : ""),
-      heightMm: Number(part.heightMm) || defaultPartHeightMm(part),
-      heightSource: part.heightSource || (defaultPartHeightMm(part) ? "ReelKeeper package default" : ""),
+      heightMm: part.heightDefaultSuppressed ? 0 : (Number(part.heightMm) || defaultPartHeightMm(part)),
+      heightSource: part.heightDefaultSuppressed ? "" : (part.heightSource || (defaultPartHeightMm(part) ? "ReelKeeper package default" : "")),
       partIds: [part.id],
       legacyIds: [...new Set([...(identity.legacyIds || []), identity.legacyId, part.mpn, part.lcsc, part.mouser].filter(Boolean))]
     };
@@ -1434,7 +1478,16 @@ async function updateLcscPartData(store, options = {}) {
       if (options.requirePricing && !details.priceBreaks.length) throw new Error("No USD pricing found");
       if (!details.priceBreaks.length && !details.photoUrl && !details.datasheetUrl) throw new Error("No product data found");
       const updatedAt = now();
-      store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc).forEach((part) => {
+      const matchingParts = store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc);
+      let datasheetFile = "";
+      try {
+        const representative = { ...matchingParts[0], datasheetUrl: matchingParts[0]?.datasheetUrl || details.datasheetUrl };
+        const downloaded = await ensurePartDatasheet(representative, details);
+        datasheetFile = downloaded.fileName;
+      } catch (_error) {
+        // Other product data remains useful when a datasheet is unavailable.
+      }
+      matchingParts.forEach((part) => {
         if (details.priceBreaks.length) {
           part.priceBreaks = details.priceBreaks;
           part.priceCurrency = "USD";
@@ -1443,9 +1496,13 @@ async function updateLcscPartData(store, options = {}) {
         }
         if (details.photoUrl) part.photoUrl = details.photoUrl;
         if (details.datasheetUrl) part.datasheetUrl = details.datasheetUrl;
+        if (datasheetFile) {
+          part.datasheetFile = datasheetFile;
+          part.datasheetUpdatedAt = updatedAt;
+        }
         part.updatedAt = updatedAt;
       });
-      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length, photo: Boolean(details.photoUrl), datasheet: Boolean(details.datasheetUrl) });
+      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length, photo: Boolean(details.photoUrl), datasheet: Boolean(datasheetFile) });
     } catch (error) {
       results.push({ lcsc, ok: false, error: error.message || "LCSC lookup failed" });
     }
@@ -1500,6 +1557,90 @@ app.post("/api/openpnp/footprints/approve", (req, res) => {
   }
   openPnpFootprintPreviews.delete(String(req.body.token));
   res.json({ updated });
+});
+
+async function prepareHeightReviewPart(part) {
+  try {
+    if (!part.datasheetUrl && part.lcsc) {
+      const details = await lookupLcscDetails(part.lcsc);
+      if (details.datasheetUrl) part.datasheetUrl = details.datasheetUrl;
+    }
+    const downloaded = await ensurePartDatasheet(part);
+    const inspection = await inspectDatasheet(downloaded.filePath);
+    const currentStore = readStore();
+    const matchingParts = part.lcsc
+      ? currentStore.parts.filter((item) => String(item.lcsc).toUpperCase() === String(part.lcsc).toUpperCase())
+      : currentStore.parts.filter((item) => item.id === part.id);
+    matchingParts.forEach((item) => {
+      item.datasheetUrl = part.datasheetUrl;
+      item.datasheetFile = downloaded.fileName;
+      item.datasheetUpdatedAt = now();
+    });
+    writeStore(currentStore);
+    const current = matchingParts[0] || part;
+    return {
+      partId: current.id,
+      name: current.name,
+      lcsc: current.lcsc || "",
+      mouser: current.mouser || "",
+      package: current.package || "",
+      currentHeightMm: Number(current.heightMm) || 0,
+      currentHeightSource: current.heightSource || "",
+      hasDatasheet: true,
+      datasheetUrl: `/api/openpnp/heights/datasheet/${encodeURIComponent(current.id)}`,
+      ...inspection
+    };
+  } catch (error) {
+    return {
+      partId: part.id,
+      name: part.name,
+      lcsc: part.lcsc || "",
+      mouser: part.mouser || "",
+      package: part.package || "",
+      currentHeightMm: Number(part.heightMm) || 0,
+      currentHeightSource: part.heightSource || "",
+      hasDatasheet: false,
+      page: 1,
+      pages: 0,
+      heightMm: null,
+      evidence: "",
+      evidenceEnglish: "",
+      evidenceTranslated: false,
+      confidence: "Manual review required",
+      error: error.message || "Datasheet could not be prepared"
+    };
+  }
+}
+
+app.post("/api/openpnp/heights/review/start", (_req, res) => {
+  const store = readStore();
+  const groups = new Map();
+  store.parts.forEach((part) => {
+    const key = String(part.lcsc || part.id).toUpperCase();
+    if (!groups.has(key)) groups.set(key, { ...part });
+  });
+  const parts = [...groups.values()].sort((a, b) => Number(Boolean(b.datasheetFile)) - Number(Boolean(a.datasheetFile)));
+  const id = randomUUID();
+  const job = { id, total: parts.length, processed: 0, items: [], done: parts.length === 0, createdAt: Date.now() };
+  heightReviewJobs.set(id, job);
+  res.json({ id, total: job.total, done: job.done });
+  if (!parts.length) return;
+  setImmediate(async () => {
+    for (const part of parts) {
+      job.items.push(await prepareHeightReviewPart(part));
+      job.processed++;
+    }
+    job.done = true;
+  });
+  for (const [jobId, existing] of heightReviewJobs) {
+    if (Date.now() - existing.createdAt > 60 * 60 * 1000) heightReviewJobs.delete(jobId);
+  }
+});
+
+app.get("/api/openpnp/heights/review/:id", (req, res) => {
+  const job = heightReviewJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Height review job not found" });
+  res.json({ total: job.total, processed: job.processed, done: job.done, items: job.items });
 });
 
 app.post("/api/openpnp/heights/prepare", async (_req, res) => {
@@ -1588,6 +1729,7 @@ app.post("/api/openpnp/heights/approve", (req, res) => {
   matchingParts.forEach((part) => {
     part.heightMm = heightMm;
     part.heightSource = selected.datasheetFile ? "Datasheet verified" : "Manual height review";
+    part.heightDefaultSuppressed = false;
     part.heightVerifiedAt = now();
     part.heightDatasheetPage = Math.max(1, Number(req.body?.page) || 1);
     part.heightEvidence = String(req.body?.evidence || "").slice(0, 500);
@@ -1604,6 +1746,29 @@ app.post("/api/openpnp/heights/approve", (req, res) => {
   });
   writeStore(store);
   res.json({ updated: matchingParts.length, heightMm });
+});
+
+app.delete("/api/openpnp/heights", (_req, res) => {
+  const store = readStore();
+  store.parts.forEach((part) => {
+    part.heightMm = 0;
+    part.heightSource = "";
+    part.heightDefaultSuppressed = true;
+    delete part.heightVerifiedAt;
+    delete part.heightDatasheetPage;
+    delete part.heightEvidence;
+    part.updatedAt = now();
+  });
+  store.movements.unshift({
+    id: `move_${Date.now()}`,
+    type: "height-reset",
+    partName: `${store.parts.length} component${store.parts.length === 1 ? "" : "s"}`,
+    delta: 0,
+    source: "All stored heights removed",
+    at: now()
+  });
+  writeStore(store);
+  res.json({ cleared: store.parts.length });
 });
 
 app.get("/api/export/openpnp/import-script.js", (_req, res) => {
@@ -1643,9 +1808,17 @@ app.get("/api/audit", (_req, res) => {
   res.json({ entries });
 });
 
-app.post("/api/parts", (req, res) => {
+app.post("/api/parts", async (req, res) => {
   const store = readStore();
   const part = normalizePart(req.body || {});
+  if (part.lcsc) {
+    try {
+      const details = await lookupLcscDetails(part.lcsc);
+      await ensurePartDatasheet(part, details);
+    } catch (_error) {
+      // Manual entry remains usable if no datasheet is available.
+    }
+  }
   store.parts.unshift(part);
   recordMovement(store, { type: "create", partId: part.id, delta: part.quantity, source: "manual" });
   writeStore(store);
@@ -1748,6 +1921,7 @@ app.post("/api/import/order", async (req, res) => {
       try {
         const details = await lookupLcscDetails(row.lcsc);
         if (!row.photoUrl) row.photoUrl = details.photoUrl;
+        if (details.datasheetUrl) row.datasheetUrl = details.datasheetUrl;
         if (details.priceBreaks.length) {
           row.priceBreaks = details.priceBreaks;
           row.priceSource = "LCSC";
@@ -1775,6 +1949,14 @@ app.post("/api/import/order", async (req, res) => {
       recordMovement(store, { type: "order-import", partId: part.id, delta: quantity, source: batch.id });
       batch.changes.push({ action: "created", partId: part.id, added: quantity, beforeQuantity: 0, lcsc: part.lcsc, mpn: part.mpn, name: part.name, storageType: part.storageType });
       changes.push({ action: "created", part, added: quantity });
+    }
+    const importedPart = changes.at(-1)?.part;
+    if (importedPart?.lcsc && !importedPart.datasheetFile) {
+      try {
+        await ensurePartDatasheet(importedPart);
+      } catch (_error) {
+        // Inventory import remains usable if the datasheet cannot be cached.
+      }
     }
   }
 
@@ -1933,7 +2115,7 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/upload", description: "Upload an XLSX BOM as base64. Body: { fileName, fileBase64 }. Returns compatible stock matches and shortages." },
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
       { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
-      { method: "POST", path: "/parts/update-all", description: "Refresh LCSC pricing and photos, then fetch missing EasyEDA footprint previews for approval." },
+      { method: "POST", path: "/parts/update-all", description: "Refresh LCSC pricing and photos, cache missing datasheets, then fetch missing EasyEDA footprint previews for approval." },
       { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
       { method: "GET", path: "/export/openpnp/packages.xml", description: "Download OpenPnP packages.xml with generated footprints for standard two-terminal passive packages." },
       { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },
@@ -1945,8 +2127,11 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/openpnp/footprints/fetch", description: "Fetch EasyEDA footprint previews for inventory components with LCSC numbers." },
       { method: "POST", path: "/openpnp/footprints/approve", description: "Approve fetched EasyEDA footprint previews using the temporary token and selected LCSC numbers." },
       { method: "POST", path: "/openpnp/heights/prepare", description: "Download and inspect component datasheets, returning one review item per unique component." },
+      { method: "POST", path: "/openpnp/heights/review/start", description: "Start background datasheet preparation for incremental component-height review." },
+      { method: "GET", path: "/openpnp/heights/review/:id", description: "Poll a component-height review job; ready components are returned while remaining datasheets continue processing." },
       { method: "GET", path: "/openpnp/heights/datasheet/:partId", description: "Open a locally stored component datasheet for height review." },
       { method: "POST", path: "/openpnp/heights/approve", description: "Save an approved per-part height. Body: { partId, heightMm, page, evidence }." },
+      { method: "DELETE", path: "/openpnp/heights", description: "Delete all stored and package-default component heights." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],
