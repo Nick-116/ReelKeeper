@@ -7,6 +7,8 @@ const state = {
   pendingBomMatchLineIndex: null,
   advancedFilters: {},
   pendingFootprints: null,
+  heightReviewItems: [],
+  heightReviewIndex: 0,
   openPnpIssues: [],
   knownOpenPnpPackages: []
 };
@@ -997,6 +999,91 @@ async function autoAssignNozzles() {
   }
 }
 
+function renderHeightReview() {
+  const item = state.heightReviewItems[state.heightReviewIndex];
+  if (!item) {
+    $("#heightReviewDialog").close();
+    loadParts();
+    loadOpenPnpReadiness();
+    return;
+  }
+  $("#heightReviewProgress").textContent = `${state.heightReviewIndex + 1} of ${state.heightReviewItems.length}`;
+  $("#heightReviewName").textContent = item.name || "Unnamed component";
+  $("#heightReviewIdentifiers").textContent = [item.lcsc, item.mouser && `Mouser ${item.mouser}`, item.package].filter(Boolean).join(" · ");
+  $("#heightReviewConfidence").textContent = item.confidence;
+  $("#heightReviewEvidence").textContent = item.evidence || "No explicit height was found. Inspect the datasheet and enter the value manually.";
+  $("#heightReviewCurrent").innerHTML = `<strong>Current ReelKeeper height</strong><span>${item.currentHeightMm ? `${formatCompactNumber(item.currentHeightMm)} mm · ${escapeHtml(item.currentHeightSource || "Unknown source")}` : "No current height"}</span>`;
+  $("#heightReviewInput").value = item.heightMm || "";
+  $("#heightReviewError").textContent = item.error || "";
+  $("#previousHeightBtn").disabled = state.heightReviewIndex === 0;
+  const viewer = $("#heightDatasheetViewer");
+  viewer.innerHTML = item.hasDatasheet
+    ? `<iframe title="Datasheet for ${escapeHtml(item.name)}" src="${item.datasheetUrl}#page=${item.page || 1}&zoom=170"></iframe>`
+    : `<div class="datasheet-unavailable"><strong>Datasheet unavailable</strong><span>${escapeHtml(item.error || "No datasheet could be located for this component.")}</span></div>`;
+}
+
+async function beginHeightReview() {
+  const button = $("#reviewPartHeightsBtn");
+  button.disabled = true;
+  button.classList.add("is-loading");
+  const originalText = button.textContent;
+  button.textContent = "Preparing datasheets";
+  try {
+    const result = await api("/api/openpnp/heights/prepare", { method: "POST", body: "{}" });
+    if (!result.items.length) {
+      window.alert("Add components before reviewing part heights.");
+      return;
+    }
+    state.heightReviewItems = result.items;
+    state.heightReviewIndex = 0;
+    renderHeightReview();
+    $("#heightReviewDialog").showModal();
+  } catch (error) {
+    window.alert(`Height review could not be prepared: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.classList.remove("is-loading");
+    button.textContent = originalText;
+  }
+}
+
+function moveHeightReview(direction) {
+  state.heightReviewIndex = Math.max(0, Math.min(state.heightReviewItems.length, state.heightReviewIndex + direction));
+  renderHeightReview();
+}
+
+async function approveReviewedHeight() {
+  const item = state.heightReviewItems[state.heightReviewIndex];
+  const heightMm = Number($("#heightReviewInput").value);
+  if (!Number.isFinite(heightMm) || heightMm < 0.1 || heightMm > 100) {
+    $("#heightReviewError").textContent = "Enter a height between 0.1 and 100 mm.";
+    return;
+  }
+  const button = $("#approveHeightBtn");
+  button.disabled = true;
+  try {
+    await api("/api/openpnp/heights/approve", {
+      method: "POST",
+      body: JSON.stringify({ partId: item.partId, heightMm, page: item.page, evidence: item.evidence })
+    });
+    item.currentHeightMm = heightMm;
+    item.currentHeightSource = item.hasDatasheet ? "Datasheet verified" : "Manual height review";
+    moveHeightReview(1);
+  } catch (error) {
+    $("#heightReviewError").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function closeHeightReview() {
+  state.heightReviewItems = [];
+  state.heightReviewIndex = 0;
+  $("#heightReviewDialog").close();
+  loadParts();
+  loadOpenPnpReadiness();
+}
+
 function drawFootprintPreview(canvas, footprint) {
   const context = canvas.getContext("2d");
   const width = canvas.width;
@@ -1132,7 +1219,8 @@ function auditActionLabel(type) {
     "footprint-map": "OpenPnP package mapped",
     "nozzle-assign": "Nozzle size assigned",
     "nozzle-auto": "Nozzle sizes recommended",
-    "part-data-update": "Component data updated"
+    "part-data-update": "Component data updated",
+    "height-verify": "Component height verified"
   })[type] || type;
 }
 
@@ -1274,6 +1362,11 @@ function bindEvents() {
   $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);
   $("#autoAssignNozzlesBtn")?.addEventListener("click", autoAssignNozzles);
+  $("#reviewPartHeightsBtn")?.addEventListener("click", beginHeightReview);
+  $("#closeHeightReviewBtn")?.addEventListener("click", closeHeightReview);
+  $("#previousHeightBtn")?.addEventListener("click", () => moveHeightReview(-1));
+  $("#skipHeightBtn")?.addEventListener("click", () => moveHeightReview(1));
+  $("#approveHeightBtn")?.addEventListener("click", approveReviewedHeight);
   $("#nozzleAssignmentList")?.addEventListener("change", (event) => {
     const select = event.target.closest("[data-nozzle-package]");
     if (select) assignNozzleSize(select);

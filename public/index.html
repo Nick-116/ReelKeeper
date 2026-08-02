@@ -186,7 +186,7 @@
                   <span><strong>C</strong> Capacitors</span>
                   <span><strong>L</strong> Inductors</span>
                   <span><strong>D</strong> Diodes</span>
-                  <span><strong>LED</strong> LEDs</span>
+                  <span><strong>LD</strong> LEDs</span>
                   <span><strong>F</strong> Fuses</span>
                   <span><strong>CN</strong> Connectors</span>
                   <span><strong>IC</strong> ICs &amp; Modules</span>
@@ -200,9 +200,12 @@
           </div>
           <div class="openpnp-panel" id="openpnp-packages">
             <div class="panel">
-              <div>
-                <h3>Packages and part heights</h3>
-                <p class="hint">Review footprint coverage, placement heights, and packages ReelKeeper cannot identify confidently. Package-based heights are starting values and should be checked against the component datasheet.</p>
+              <div class="panel-title-row">
+                <div>
+                  <h3>Packages and part heights</h3>
+                  <p class="hint">Review footprint coverage, placement heights, and packages ReelKeeper cannot identify confidently. Package-based heights are starting values and should be checked against the component datasheet.</p>
+                </div>
+                <button id="reviewPartHeightsBtn">Review component heights</button>
               </div>
               <div class="openpnp-readiness" id="openPnpReadiness" aria-live="polite">
                 <p class="hint">Checking footprint coverage...</p>
@@ -415,6 +418,45 @@
           <span></span>
           <button type="button" id="cancelFootprintReviewBtn">Cancel</button>
           <button type="button" class="primary" id="approveFootprintsBtn">Approve selected</button>
+        </footer>
+      </div>
+    </dialog>
+    <dialog id="heightReviewDialog" class="height-review-dialog">
+      <div class="height-review-content">
+        <header>
+          <div>
+            <h3>Review component height</h3>
+            <span class="meta" id="heightReviewProgress"></span>
+          </div>
+          <button type="button" class="icon-button" id="closeHeightReviewBtn" aria-label="Close">x</button>
+        </header>
+        <div class="height-review-heading">
+          <div>
+            <strong id="heightReviewName"></strong>
+            <span class="meta" id="heightReviewIdentifiers"></span>
+          </div>
+          <span class="pill" id="heightReviewConfidence"></span>
+        </div>
+        <div class="height-review-workspace">
+          <div class="datasheet-viewer" id="heightDatasheetViewer"></div>
+          <aside class="height-review-controls">
+            <div>
+              <span class="field-label">Extracted evidence</span>
+              <p id="heightReviewEvidence"></p>
+            </div>
+            <div class="current-height" id="heightReviewCurrent"></div>
+            <label>
+              <span>Approved height (mm)</span>
+              <input id="heightReviewInput" type="number" min="0.1" max="100" step="0.01">
+            </label>
+            <p class="hint" id="heightReviewError"></p>
+          </aside>
+        </div>
+        <footer>
+          <button type="button" id="previousHeightBtn">Previous</button>
+          <span></span>
+          <button type="button" id="skipHeightBtn">Skip</button>
+          <button type="button" class="primary" id="approveHeightBtn">Approve &amp; next</button>
         </footer>
       </div>
     </dialog>

@@ -10,6 +10,7 @@
   "dependencies": {
     "@e965/xlsx": "^0.20.3",
     "express": "^4.19.2",
+    "pdfjs-dist": "^4.10.38",
     "yauzl": "^3.4.0"
   },
   "engines": {

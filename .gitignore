@@ -1,5 +1,6 @@
 node_modules/
 data/*.json
+data/datasheets/
 !data/.gitkeep
 .DS_Store
 *.log

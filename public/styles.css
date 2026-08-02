@@ -997,7 +997,8 @@ img.component-thumb:hover {
   min-width: 0;
 }
 
-#updateAllPartsBtn.is-loading::before {
+#updateAllPartsBtn.is-loading::before,
+#reviewPartHeightsBtn.is-loading::before {
   content: "";
   display: inline-block;
   width: 0.85rem;
@@ -1014,6 +1015,87 @@ img.component-thumb:hover {
 
 .footprint-review-dialog {
   width: min(900px, calc(100vw - 2rem));
+}
+
+.height-review-dialog {
+  width: min(1180px, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+}
+
+.height-review-content,
+.height-review-heading > div,
+.height-review-controls,
+.current-height,
+.datasheet-unavailable {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.height-review-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.height-review-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 0.8fr);
+  gap: 1rem;
+  min-height: min(68vh, 760px);
+}
+
+.datasheet-viewer {
+  min-width: 0;
+  min-height: 32rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #e8ecea;
+}
+
+.datasheet-viewer iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.datasheet-unavailable {
+  place-content: center;
+  justify-items: center;
+  height: 100%;
+  padding: 2rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.height-review-controls {
+  align-content: start;
+  gap: 1rem;
+}
+
+.height-review-controls p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.current-height {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.current-height span {
+  color: var(--muted);
 }
 
 .footprint-review-content,
@@ -1439,6 +1521,19 @@ dialog h3 {
 
   .openpnp-package-map {
     grid-template-columns: 1fr;
+  }
+
+  .height-review-workspace,
+  .height-review-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .height-review-workspace {
+    min-height: 0;
+  }
+
+  .datasheet-viewer {
+    min-height: 55vh;
   }
 
   .footprint-review-row {

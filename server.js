@@ -518,7 +518,7 @@ function extractLcscPriceBreaks(html) {
 
 async function lookupLcscDetails(lcsc, refresh = false) {
   const partNumber = String(lcsc || "").trim().toUpperCase();
-  if (!/^C\d+$/i.test(partNumber)) return { photoUrl: "", priceBreaks: [] };
+  if (!/^C\d+$/i.test(partNumber)) return { photoUrl: "", priceBreaks: [], datasheetUrl: "" };
   if (!refresh && lcscDetailsCache.has(partNumber)) return lcscDetailsCache.get(partNumber);
 
   try {
@@ -529,16 +529,97 @@ async function lookupLcscDetails(lcsc, refresh = false) {
     });
     if (!response.ok) throw new Error(`LCSC returned ${response.status}`);
     const html = await response.text();
-    const images = [...html.matchAll(/https?:\/\/assets\.lcsc\.com\/images\/lcsc\/[^"'<>\\]+?\.(?:jpg|jpeg|png|webp)/gi)]
+    const normalizedHtml = html.replace(/\\u002F|\\\//g, "/").replace(/&amp;/g, "&");
+    const images = [...normalizedHtml.matchAll(/https?:\/\/assets\.lcsc\.com\/images\/lcsc\/[^"'<>\\]+?\.(?:jpg|jpeg|png|webp)/gi)]
       .map((match) => match[0].replace(/\\u002F/g, "/"));
     const image = images.find((url) => /_front\./i.test(url)) || images.find((url) => !/logo|blank/i.test(url)) || "";
-    const details = { photoUrl: image, priceBreaks: extractLcscPriceBreaks(html) };
+    const datasheetUrl = normalizedHtml.match(/https?:\/\/datasheet\.lcsc\.com\/[^"'<>\s]+?\.pdf(?:\?[^"'<>\s]*)?/i)?.[0] || "";
+    const details = { photoUrl: image, priceBreaks: extractLcscPriceBreaks(html), datasheetUrl };
     lcscDetailsCache.set(partNumber, details);
     return details;
   } catch (error) {
-    if (!refresh) lcscDetailsCache.set(partNumber, { photoUrl: "", priceBreaks: [] });
+    if (!refresh) lcscDetailsCache.set(partNumber, { photoUrl: "", priceBreaks: [], datasheetUrl: "" });
     throw error;
   }
+}
+
+const datasheetDirectory = path.join(path.dirname(dataFile), "datasheets");
+let pdfJsPromise;
+
+function loadPdfJs() {
+  pdfJsPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs");
+  return pdfJsPromise;
+}
+
+function safeDatasheetName(part) {
+  return String(part.lcsc || part.mouser || part.id).replace(/[^A-Z0-9._-]/gi, "_");
+}
+
+function validatedDatasheetUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" && url.hostname === "datasheet.lcsc.com" && /\.pdf(?:$|\?)/i.test(url.href) ? url : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function downloadDatasheet(part) {
+  const url = validatedDatasheetUrl(part.datasheetUrl);
+  if (!url) throw new Error("No supported LCSC datasheet URL was found");
+  fs.mkdirSync(datasheetDirectory, { recursive: true });
+  const fileName = `${safeDatasheetName(part)}.pdf`;
+  const filePath = path.join(datasheetDirectory, fileName);
+  if (!fs.existsSync(filePath)) {
+    const response = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 ReelKeeper/1.0" } });
+    if (!response.ok) throw new Error(`Datasheet download returned ${response.status}`);
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.length < 5 || data.subarray(0, 5).toString() !== "%PDF-") throw new Error("Downloaded file is not a PDF");
+    if (data.length > 30 * 1024 * 1024) throw new Error("Datasheet is larger than 30 MB");
+    fs.writeFileSync(filePath, data);
+  }
+  return { fileName, filePath };
+}
+
+function heightEvidence(pageText) {
+  const normalized = String(pageText || "").replace(/\s+/g, " ").trim();
+  const patterns = [
+    /\b(?:maximum|max\.?\s*)?(?:product|component|package|body|overall|seated)\s+(?:height|thickness)\s*(?:\([^)]*\))?\s*[:=]?\s*(\d+(?:\.\d+)?)\s*mm\b/i,
+    /\b(\d+(?:\.\d+)?)\s*mm\s*(?:maximum|max\.?\s*)?(?:product|component|package|body|overall|seated)\s+(?:height|thickness)\b/i,
+    /\b(?:maximum|max\.?\s*)?(?:height|thickness)\s*(?:\([^)]*\))?\s*[:=]\s*(\d+(?:\.\d+)?)\s*mm\b/i
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const value = Number(match?.[1]);
+    if (!Number.isFinite(value) || value < 0.1 || value > 100) continue;
+    const start = Math.max(0, match.index - 140);
+    const end = Math.min(normalized.length, match.index + match[0].length + 140);
+    return { heightMm: value, evidence: normalized.slice(start, end) };
+  }
+  return null;
+}
+
+async function inspectDatasheet(filePath) {
+  const pdfjs = await loadPdfJs();
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(filePath)), disableWorker: true }).promise;
+  let bestPage = 1;
+  let bestScore = -1;
+  let bestEvidence = "";
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = content.items.map((item) => item.str).join(" ").replace(/\s+/g, " ");
+    const score = ["mechanical", "dimensions", "package", "outline", "recommended land pattern"]
+      .reduce((total, keyword) => total + (text.toLowerCase().includes(keyword) ? 1 : 0), 0);
+    const candidate = heightEvidence(text);
+    if (candidate) return { page: pageNumber, pages: pdf.numPages, ...candidate, confidence: "Explicit height label" };
+    if (score > bestScore) {
+      bestPage = pageNumber;
+      bestScore = score;
+      bestEvidence = text.slice(0, 320);
+    }
+  }
+  return { page: bestPage, pages: pdf.numPages, heightMm: null, evidence: bestEvidence, confidence: "Manual review required" };
 }
 
 function openPnpId(value, fallback) {
@@ -824,7 +905,7 @@ function openPnpCategoryCode(part) {
     "Capacitors": "C",
     "Inductors": "L",
     "Diodes": "D",
-    "LEDs": "LED",
+    "LEDs": "LD",
     "Fuses": "F",
     "Connectors": "CN",
     "ICs & Modules": "IC",
@@ -835,26 +916,42 @@ function openPnpCategoryCode(part) {
   })[category] || String(category || "X").replace(/[^A-Z0-9]/gi, "").slice(0, 3).toUpperCase() || "X";
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function openPnpReadablePartName(part, supplierId) {
+  let name = String(part.name || part.description || part.value || part.mpn || "Unnamed part")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  [part.lcsc, part.mouser].filter(Boolean).forEach((identifier) => {
+    name = name.replace(new RegExp(`(?:LCSC|Mouser)?\\s*${escapeRegExp(identifier)}`, "gi"), " ");
+  });
+  name = name.replace(/\s+/g, " ").replace(/^[-–—\s]+|[-–—\s]+$/g, "").trim();
+  return name || String(part.value || part.mpn || supplierId || "Unnamed part").trim();
+}
+
 function openPnpPartIdentity(part) {
   const packageId = openPnpPackageId(part);
   const value = openPnpElectricalValue(part);
-  const supplierId = part.lcsc || (part.mouser ? `MOUSER-${part.mouser}` : "") || part.mpn;
+  const supplierId = part.lcsc || part.mouser || part.mpn || part.id;
   const categoryCode = openPnpCategoryCode(part);
-  let baseId;
-  let baseName;
+  const readableName = openPnpReadablePartName(part, supplierId);
+  let oldBaseId;
   if (["Resistors", "Capacitors"].includes(part.category) && value && supplierId) {
-    const type = part.category === "Resistors" ? "resistor" : "capacitor";
     const cleanSupplierId = String(supplierId).toUpperCase().replace(/[^A-Z0-9._-]+/g, "-");
-    baseId = `${value}-${packageId}-${cleanSupplierId}`;
-    baseName = `${value} ${packageId} ${type} - ${cleanSupplierId}`;
+    oldBaseId = `${value}-${packageId}-${cleanSupplierId}`;
   } else {
-    baseId = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
-    baseName = part.name || part.description || part.value || baseId;
+    oldBaseId = openPnpId(part.mpn || part.lcsc || part.mouser, part.id);
   }
+  const oldCategoryCode = part.category === "LEDs" ? "LED" : categoryCode;
+  const oldId = String(oldBaseId).toUpperCase().startsWith(`${oldCategoryCode}-`) ? oldBaseId : `${oldCategoryCode}-${oldBaseId}`;
   return {
-    id: String(baseId).toUpperCase().startsWith(`${categoryCode}-`) ? baseId : `${categoryCode}-${baseId}`,
-    name: `${categoryCode} - ${baseName}`,
-    legacyId: baseId
+    id: `${categoryCode}-${readableName}-${supplierId}`,
+    name: `${categoryCode} - ${readableName} - ${supplierId}`,
+    legacyId: oldId,
+    legacyIds: [oldId, oldBaseId]
   };
 }
 
@@ -877,7 +974,7 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       heightMm: Number(part.heightMm) || defaultPartHeightMm(part),
       heightSource: part.heightSource || (defaultPartHeightMm(part) ? "ReelKeeper package default" : ""),
       partIds: [part.id],
-      legacyIds: [...new Set([identity.legacyId, part.mpn, part.lcsc, part.mouser].filter(Boolean))]
+      legacyIds: [...new Set([...(identity.legacyIds || []), identity.legacyId, part.mpn, part.lcsc, part.mouser].filter(Boolean))]
     };
     candidate.nozzleSize = nozzleAssignments[candidate.packageId] || "";
     if (!existing) {
@@ -1026,7 +1123,7 @@ function buildOpenPnpPackagesXml(parts) {
 function buildOpenPnpImportScript(parts, nozzleAssignments = {}) {
   const data = JSON.stringify(openPnpParts(parts, nozzleAssignments), null, 2);
   return `// ReelKeeper OpenPnP additive parts importer
-// Generated ${now()}. Existing IDs are preserved; legacy descriptions and EasyEDA package assignments may be cleaned up.
+// Generated ${now()}. Existing ReelKeeper IDs are migrated; configured parts, feeders, and placements retain the same Part object.
 var Part = Java.type("org.openpnp.model.Part");
 var Package = Java.type("org.openpnp.model.Package");
 var Length = Java.type("org.openpnp.model.Length");
@@ -1038,6 +1135,7 @@ var reelKeeperParts = ${data};
 var addedParts = 0;
 var skippedParts = 0;
 var migratedLegacyParts = 0;
+var migratedPartIds = 0;
 var updatedPartNames = 0;
 var partHeightsAdded = 0;
 var addedPackages = 0;
@@ -1139,6 +1237,12 @@ reelKeeperParts.forEach(function(item) {
     });
   }
   if (existingPart != null) {
+    if (String(existingPart.getId()) !== item.id) {
+      config.removePart(existingPart);
+      existingPart.setId(item.id);
+      config.addPart(existingPart);
+      migratedPartIds++;
+    }
     if (String(existingPart.getName() || "") !== item.name) {
       existingPart.setName(item.name);
       updatedPartNames++;
@@ -1173,6 +1277,7 @@ config.save();
 var summary = "ReelKeeper import complete.\\nAdded parts: " + addedParts +
   "\\nExisting parts skipped: " + skippedParts +
   "\\nPart names updated: " + updatedPartNames +
+  "\\nPart IDs migrated: " + migratedPartIds +
   "\\nPart heights added: " + partHeightsAdded +
   "\\nLegacy package names updated: " + migratedLegacyParts +
   "\\nPackages created: " + addedPackages +
@@ -1327,7 +1432,7 @@ async function updateLcscPartData(store, options = {}) {
     try {
       const details = await lookupLcscDetails(lcsc, true);
       if (options.requirePricing && !details.priceBreaks.length) throw new Error("No USD pricing found");
-      if (!details.priceBreaks.length && !details.photoUrl) throw new Error("No product data found");
+      if (!details.priceBreaks.length && !details.photoUrl && !details.datasheetUrl) throw new Error("No product data found");
       const updatedAt = now();
       store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc).forEach((part) => {
         if (details.priceBreaks.length) {
@@ -1337,9 +1442,10 @@ async function updateLcscPartData(store, options = {}) {
           part.priceUpdatedAt = updatedAt;
         }
         if (details.photoUrl) part.photoUrl = details.photoUrl;
+        if (details.datasheetUrl) part.datasheetUrl = details.datasheetUrl;
         part.updatedAt = updatedAt;
       });
-      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length, photo: Boolean(details.photoUrl) });
+      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length, photo: Boolean(details.photoUrl), datasheet: Boolean(details.datasheetUrl) });
     } catch (error) {
       results.push({ lcsc, ok: false, error: error.message || "LCSC lookup failed" });
     }
@@ -1394,6 +1500,110 @@ app.post("/api/openpnp/footprints/approve", (req, res) => {
   }
   openPnpFootprintPreviews.delete(String(req.body.token));
   res.json({ updated });
+});
+
+app.post("/api/openpnp/heights/prepare", async (_req, res) => {
+  const store = readStore();
+  const groups = new Map();
+  store.parts.forEach((part) => {
+    const key = String(part.lcsc || part.id).toUpperCase();
+    if (!groups.has(key)) groups.set(key, part);
+  });
+  const items = await mapWithConcurrency([...groups.values()], 2, async (part) => {
+    try {
+      if (!part.datasheetUrl && part.lcsc) {
+        const details = await lookupLcscDetails(part.lcsc);
+        if (details.datasheetUrl) {
+          store.parts.filter((item) => String(item.lcsc).toUpperCase() === String(part.lcsc).toUpperCase())
+            .forEach((item) => { item.datasheetUrl = details.datasheetUrl; });
+          part.datasheetUrl = details.datasheetUrl;
+        }
+      }
+      const downloaded = await downloadDatasheet(part);
+      const inspection = await inspectDatasheet(downloaded.filePath);
+      const matchingParts = part.lcsc
+        ? store.parts.filter((item) => String(item.lcsc).toUpperCase() === String(part.lcsc).toUpperCase())
+        : [part];
+      matchingParts.forEach((item) => {
+        item.datasheetFile = downloaded.fileName;
+        item.datasheetUpdatedAt = now();
+      });
+      return {
+        partId: part.id,
+        name: part.name,
+        lcsc: part.lcsc || "",
+        mouser: part.mouser || "",
+        package: part.package || "",
+        currentHeightMm: Number(part.heightMm) || 0,
+        currentHeightSource: part.heightSource || "",
+        hasDatasheet: true,
+        datasheetUrl: `/api/openpnp/heights/datasheet/${encodeURIComponent(part.id)}`,
+        ...inspection
+      };
+    } catch (error) {
+      return {
+        partId: part.id,
+        name: part.name,
+        lcsc: part.lcsc || "",
+        mouser: part.mouser || "",
+        package: part.package || "",
+        currentHeightMm: Number(part.heightMm) || 0,
+        currentHeightSource: part.heightSource || "",
+        hasDatasheet: false,
+        page: 1,
+        pages: 0,
+        heightMm: null,
+        evidence: "",
+        confidence: "Manual review required",
+        error: error.message || "Datasheet could not be prepared"
+      };
+    }
+  });
+  writeStore(store);
+  res.json({ items });
+});
+
+app.get("/api/openpnp/heights/datasheet/:partId", (req, res) => {
+  const store = readStore();
+  const part = store.parts.find((item) => item.id === req.params.partId);
+  const fileName = path.basename(String(part?.datasheetFile || ""));
+  const filePath = path.join(datasheetDirectory, fileName);
+  if (!part || !fileName || !fs.existsSync(filePath)) return res.status(404).json({ error: "Datasheet not found" });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+  res.sendFile(filePath);
+});
+
+app.post("/api/openpnp/heights/approve", (req, res) => {
+  const heightMm = Number(req.body?.heightMm);
+  if (!Number.isFinite(heightMm) || heightMm < 0.1 || heightMm > 100) {
+    return res.status(400).json({ error: "Height must be between 0.1 and 100 mm" });
+  }
+  const store = readStore();
+  const selected = store.parts.find((part) => part.id === String(req.body?.partId || ""));
+  if (!selected) return res.status(404).json({ error: "Component not found" });
+  const matchingParts = selected.lcsc
+    ? store.parts.filter((part) => String(part.lcsc).toUpperCase() === String(selected.lcsc).toUpperCase())
+    : [selected];
+  matchingParts.forEach((part) => {
+    part.heightMm = heightMm;
+    part.heightSource = selected.datasheetFile ? "Datasheet verified" : "Manual height review";
+    part.heightVerifiedAt = now();
+    part.heightDatasheetPage = Math.max(1, Number(req.body?.page) || 1);
+    part.heightEvidence = String(req.body?.evidence || "").slice(0, 500);
+    part.updatedAt = now();
+  });
+  store.movements.unshift({
+    id: `move_${Date.now()}`,
+    type: "height-verify",
+    partId: selected.id,
+    partName: selected.name,
+    delta: 0,
+    source: `${heightMm} mm`,
+    at: now()
+  });
+  writeStore(store);
+  res.json({ updated: matchingParts.length, heightMm });
 });
 
 app.get("/api/export/openpnp/import-script.js", (_req, res) => {
@@ -1734,6 +1944,9 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/openpnp/nozzles/auto", description: "Assign conservative nozzle size recommendations to currently unassigned packages." },
       { method: "POST", path: "/openpnp/footprints/fetch", description: "Fetch EasyEDA footprint previews for inventory components with LCSC numbers." },
       { method: "POST", path: "/openpnp/footprints/approve", description: "Approve fetched EasyEDA footprint previews using the temporary token and selected LCSC numbers." },
+      { method: "POST", path: "/openpnp/heights/prepare", description: "Download and inspect component datasheets, returning one review item per unique component." },
+      { method: "GET", path: "/openpnp/heights/datasheet/:partId", description: "Open a locally stored component datasheet for height review." },
+      { method: "POST", path: "/openpnp/heights/approve", description: "Save an approved per-part height. Body: { partId, heightMm, page, evidence }." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],
