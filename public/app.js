@@ -18,6 +18,7 @@ const routes = {
   "/bom": "bom",
   "/orders": "orders",
   "/add-inventory": "orders",
+  "/openpnp": "openpnp",
   "/settings": "settings"
 };
 
@@ -33,6 +34,7 @@ const fields = {
   lcsc: $("#partLcsc"),
   mouser: $("#partMouser"),
   package: $("#partPackage"),
+  heightMm: $("#partHeightMm"),
   value: $("#partValue"),
   quantity: $("#partQuantity"),
   storageType: $("#partStorageType"),
@@ -65,6 +67,8 @@ const headerMap = {
   category: "category",
   package: "package",
   footprint: "package",
+  height: "heightMm",
+  heightmm: "heightMm",
   value: "value",
   quantity: "quantity",
   qty: "quantity",
@@ -330,6 +334,7 @@ function renderParts() {
             ${part.lcsc ? `<span class="pill">${escapeHtml(part.lcsc)}</span>` : ""}
             ${part.mouser ? `<span class="pill">Mouser ${escapeHtml(part.mouser)}</span>` : ""}
             ${part.package ? `<span class="pill">${escapeHtml(part.package)}</span>` : ""}
+            ${part.heightMm ? `<span class="pill">${formatCompactNumber(part.heightMm)} mm high</span>` : `<span class="pill warning-pill">Height needed</span>`}
             ${part.value ? `<span class="pill">${escapeHtml(part.value)}</span>` : ""}
             ${part.storageType === "loose" ? `<span class="pill loose-pill">Loose stock</span>` : ""}
             ${part.priceBreaks?.length ? `<span class="pill price-pill">${part.priceSource ? `${escapeHtml(part.priceSource)} ` : "From "}$${Number(part.priceBreaks.at(-1).unitPrice).toFixed(4)}</span>` : ""}
@@ -378,6 +383,8 @@ function openPartDialog(part = null) {
 }
 
 function formPayload() {
+  const heightMm = Number(fields.heightMm.value || 0);
+  const heightUnchanged = state.activePart && Number(state.activePart.heightMm || 0) === heightMm;
   return {
     name: fields.name.value,
     category: fields.category.value,
@@ -386,6 +393,8 @@ function formPayload() {
     lcsc: fields.lcsc.value,
     mouser: fields.mouser.value,
     package: fields.package.value,
+    heightMm,
+    heightSource: heightUnchanged ? state.activePart.heightSource : "Manual",
     value: fields.value.value,
     quantity: Number(fields.quantity.value || 0),
     storageType: fields.storageType.value,
@@ -614,20 +623,25 @@ async function checkBom() {
   renderBomResults(data);
 }
 
-async function updateLcscPricing() {
-  const button = $("#updatePricingBtn");
-  const status = $("#pricingStatus");
+async function updateAllParts() {
+  const button = $("#updateAllPartsBtn");
+  const status = $("#partUpdateStatus");
   button.disabled = true;
   button.classList.add("is-loading");
-  status.textContent = "Updating prices from LCSC...";
+  status.textContent = "Updating pricing, photos, and package data...";
   try {
-    const result = await api("/api/pricing/lcsc/update", { method: "POST" });
-    status.textContent = result.total
-      ? `Updated ${result.updated} of ${result.total} LCSC part numbers${result.failed ? `; ${result.failed} failed` : ""}.`
+    const result = await api("/api/parts/update-all", { method: "POST", body: "{}" });
+    status.textContent = result.pricing.total
+      ? `Updated ${result.pricing.updated} of ${result.pricing.total} LCSC parts${result.pricing.failed ? `; ${result.pricing.failed} data lookups failed` : ""}.`
       : "No components have an LCSC part number yet.";
     await loadParts();
+    if (result.footprints.items.length) {
+      state.pendingFootprints = result.footprints;
+      renderFootprintReview();
+      $("#footprintReviewDialog").showModal();
+    }
   } catch (error) {
-    status.textContent = `Pricing update failed: ${error.message}`;
+    status.textContent = `Component update failed: ${error.message}`;
   } finally {
     button.disabled = false;
     button.classList.remove("is-loading");
@@ -836,8 +850,8 @@ function csvEscape(value) {
 }
 
 function exportTemplate() {
-  const headers = ["LCSC", "MPN", "Name", "Category", "Package", "Value", "Manufacturer", "Quantity", "Packaging Status"];
-  const example = ["C25804", "0603WAF1002T5E", "10k resistor", "Resistors", "0603", "10k", "UNI-ROYAL", "1000", "machine-ready"];
+  const headers = ["LCSC", "MPN", "Name", "Category", "Package", "Height (mm)", "Value", "Manufacturer", "Quantity", "Packaging Status"];
+  const example = ["C25804", "0603WAF1002T5E", "10k resistor", "Resistors", "0603", "0.45", "10k", "UNI-ROYAL", "1000", "machine-ready"];
   const csv = [headers, example].map((row) => row.map(csvEscape).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
@@ -871,12 +885,14 @@ async function loadOpenPnpReadiness() {
       return;
     }
     const issues = status.items.filter((item) => !item.ready);
+    const heightIssues = status.items.filter((item) => !item.heightMm);
     state.openPnpIssues = issues;
-    container.className = `openpnp-readiness ${issues.length ? "has-issues" : "is-ready"}`;
+    container.className = `openpnp-readiness ${issues.length || heightIssues.length ? "has-issues" : "is-ready"}`;
     container.innerHTML = `
       <div class="openpnp-readiness-summary">
         <strong>${issues.length ? `${status.needsReview.toLocaleString()} footprint${status.needsReview === 1 ? "" : "s"} need review` : "All footprints are ready"}</strong>
         <span>${status.ready.toLocaleString()} of ${status.total.toLocaleString()} components will export with pad geometry.</span>
+        <span>${status.heightsReady.toLocaleString()} of ${status.total.toLocaleString()} components have an OpenPnP placement height${heightIssues.length ? `; ${heightIssues.length.toLocaleString()} need a manual height` : ""}.</span>
       </div>
       ${issues.length ? `<div class="openpnp-issue-list">${issues.map((item, index) => `
         <div class="openpnp-issue">
@@ -890,6 +906,13 @@ async function loadOpenPnpReadiness() {
             </select>
             <button data-assign-package="${index}">Use package</button>
           </div>
+        </div>
+      `).join("")}</div>` : ""}
+      ${heightIssues.length ? `<div class="openpnp-issue-list">${heightIssues.map((item) => `
+        <div class="openpnp-issue height-issue">
+          <div><strong>${escapeHtml(item.name || item.id)}</strong><span>${escapeHtml(item.id)}</span></div>
+          <span class="pill">${escapeHtml(item.packageId)}</span>
+          <span>No reliable package height default. Enter the datasheet height in the component editor.</span>
         </div>
       `).join("")}</div>` : ""}
     `;
@@ -1045,29 +1068,6 @@ function renderFootprintReview() {
   $("#approveFootprintsBtn").disabled = successful.length === 0;
 }
 
-async function fetchEasyEdaFootprints() {
-  const button = $("#fetchEasyEdaFootprintsBtn");
-  button.disabled = true;
-  button.classList.add("is-loading");
-  const originalText = button.textContent;
-  button.textContent = "Fetching footprints";
-  try {
-    const data = await api("/api/openpnp/footprints/fetch", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
-    state.pendingFootprints = data;
-    renderFootprintReview();
-    $("#footprintReviewDialog").showModal();
-  } catch (error) {
-    window.alert(`EasyEDA footprint fetch failed: ${error.message}`);
-  } finally {
-    button.disabled = false;
-    button.classList.remove("is-loading");
-    button.textContent = originalText;
-  }
-}
-
 function closeFootprintReview() {
   state.pendingFootprints = null;
   $("#footprintReviewDialog").close();
@@ -1131,7 +1131,8 @@ function auditActionLabel(type) {
     "footprint-import": "EasyEDA footprint approved",
     "footprint-map": "OpenPnP package mapped",
     "nozzle-assign": "Nozzle size assigned",
-    "nozzle-auto": "Nozzle sizes recommended"
+    "nozzle-auto": "Nozzle sizes recommended",
+    "part-data-update": "Component data updated"
   })[type] || type;
 }
 
@@ -1194,6 +1195,8 @@ function activateView(viewId, options = {}) {
   if (normalized === "settings") {
     loadDocs();
     loadImportHistory();
+  }
+  if (normalized === "openpnp") {
     loadOpenPnpReadiness();
     loadNozzleAssignments();
   }
@@ -1216,8 +1219,13 @@ function activateSettingsPanel(panelId) {
   if (panelId === "api") loadDocs();
   if (panelId === "history") loadImportHistory();
   if (panelId === "audit") loadAuditLog();
-  if (panelId === "general") loadOpenPnpReadiness();
-  if (panelId === "general") loadNozzleAssignments();
+}
+
+function activateOpenPnpPanel(panelId) {
+  $$(".openpnp-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.openpnpPanel === panelId));
+  $$(".openpnp-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `openpnp-${panelId}`));
+  if (panelId === "packages") loadOpenPnpReadiness();
+  if (panelId === "nozzles") loadNozzleAssignments();
 }
 
 function bindEvents() {
@@ -1261,8 +1269,7 @@ function bindEvents() {
   });
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);
-  $("#updatePricingBtn")?.addEventListener("click", updateLcscPricing);
-  $("#fetchEasyEdaFootprintsBtn")?.addEventListener("click", fetchEasyEdaFootprints);
+  $("#updateAllPartsBtn")?.addEventListener("click", updateAllParts);
   $("#closeFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);
@@ -1277,6 +1284,9 @@ function bindEvents() {
   });
   $$(".settings-tab").forEach((button) => {
     button.addEventListener("click", () => activateSettingsPanel(button.dataset.settingsPanel));
+  });
+  $$(".openpnp-tab").forEach((button) => {
+    button.addEventListener("click", () => activateOpenPnpPanel(button.dataset.openpnpPanel));
   });
   $("#importHistory")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-undo-import]");

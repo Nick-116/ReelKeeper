@@ -178,6 +178,28 @@ button:hover {
   border-radius: 3px;
 }
 
+.openpnp-icon {
+  border: 2px solid currentColor;
+  border-radius: 3px;
+}
+
+.openpnp-icon::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 2px solid #8ee1ce;
+}
+
+.openpnp-icon::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  top: 7px;
+  height: 2px;
+  background: currentColor;
+}
+
 .sheet-icon::before,
 .sheet-icon::after {
   content: "";
@@ -656,32 +678,38 @@ img.component-thumb:hover {
   gap: 0.8rem;
 }
 
-.settings-tabs {
+.settings-tabs,
+.openpnp-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
   margin-bottom: 1rem;
 }
 
-.settings-tab {
+.settings-tab,
+.openpnp-tab {
   background: #fff;
 }
 
-.settings-tab.active {
+.settings-tab.active,
+.openpnp-tab.active {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
 }
 
-.settings-panel {
+.settings-panel,
+.openpnp-panel {
   display: none;
 }
 
-.settings-panel.active {
+.settings-panel.active,
+.openpnp-panel.active {
   display: block;
 }
 
-.settings-panel > .panel + .panel {
+.settings-panel > .panel + .panel,
+.openpnp-panel > .panel + .panel {
   margin-top: 1rem;
 }
 
@@ -969,8 +997,7 @@ img.component-thumb:hover {
   min-width: 0;
 }
 
-#updatePricingBtn.is-loading::before,
-#fetchEasyEdaFootprintsBtn.is-loading::before {
+#updateAllPartsBtn.is-loading::before {
   content: "";
   display: inline-block;
   width: 0.85rem;

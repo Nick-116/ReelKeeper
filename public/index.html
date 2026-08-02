@@ -26,6 +26,7 @@
           <button class="tab active" data-view="components" data-route="/components"><span class="nav-icon resistor-icon"></span>Components</button>
           <button class="tab" data-view="bom" data-route="/bom"><span class="nav-icon sheet-icon"></span>BOM Check</button>
           <button class="tab" data-view="orders" data-route="/add-inventory"><span class="nav-icon plus-icon"></span>Add Inventory</button>
+          <button class="tab" data-view="openpnp" data-route="/openpnp"><span class="nav-icon openpnp-icon"></span>OpenPnP</button>
           <button class="tab" data-view="settings" data-route="/settings"><span class="nav-icon settings-icon"></span>Settings</button>
         </nav>
         <div class="status-panel">
@@ -154,6 +155,76 @@
           </div>
         </section>
 
+        <section class="view" id="openpnp">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Pick and place</p>
+              <h2>OpenPnP</h2>
+            </div>
+          </header>
+          <div class="openpnp-tabs" role="tablist" aria-label="OpenPnP sections">
+            <button class="openpnp-tab active" data-openpnp-panel="library">Library Export</button>
+            <button class="openpnp-tab" data-openpnp-panel="packages">Packages &amp; Heights</button>
+            <button class="openpnp-tab" data-openpnp-panel="nozzles">Nozzle Setup</button>
+          </div>
+          <div class="openpnp-panel active" id="openpnp-library">
+            <div class="panel openpnp-export">
+              <div>
+                <h3>OpenPnP library export</h3>
+                <p class="hint">Download parts and package footprints, or use the additive script to add missing OpenPnP records without replacing configured footprints.</p>
+              </div>
+              <div class="openpnp-export-actions">
+                <a class="button-link" href="/api/export/openpnp/parts.xml" download><span class="download-icon" aria-hidden="true"></span>Export parts.xml</a>
+                <a class="button-link" href="/api/export/openpnp/packages.xml" download><span class="download-icon" aria-hidden="true"></span>Export packages.xml</a>
+                <a class="button-link primary" href="/api/export/openpnp/import-script.js" download><span class="download-icon" aria-hidden="true"></span>Export import script</a>
+              </div>
+              <p class="openpnp-export-note">Put the script in OpenPnP's scripts directory, then run <strong>ReelKeeper_Import_Parts.js</strong> from the Scripts menu.</p>
+              <details class="category-prefix-reference">
+                <summary>Category prefix reference</summary>
+                <div class="category-prefix-grid">
+                  <span><strong>R</strong> Resistors</span>
+                  <span><strong>C</strong> Capacitors</span>
+                  <span><strong>L</strong> Inductors</span>
+                  <span><strong>D</strong> Diodes</span>
+                  <span><strong>LED</strong> LEDs</span>
+                  <span><strong>F</strong> Fuses</span>
+                  <span><strong>CN</strong> Connectors</span>
+                  <span><strong>IC</strong> ICs &amp; Modules</span>
+                  <span><strong>Q</strong> Transistors</span>
+                  <span><strong>SW</strong> Switches</span>
+                  <span><strong>Y</strong> Crystals &amp; Oscillators</span>
+                  <span><strong>X</strong> Uncategorized</span>
+                </div>
+              </details>
+            </div>
+          </div>
+          <div class="openpnp-panel" id="openpnp-packages">
+            <div class="panel">
+              <div>
+                <h3>Packages and part heights</h3>
+                <p class="hint">Review footprint coverage, placement heights, and packages ReelKeeper cannot identify confidently. Package-based heights are starting values and should be checked against the component datasheet.</p>
+              </div>
+              <div class="openpnp-readiness" id="openPnpReadiness" aria-live="polite">
+                <p class="hint">Checking footprint coverage...</p>
+              </div>
+            </div>
+          </div>
+          <div class="openpnp-panel" id="openpnp-nozzles">
+            <div class="panel nozzle-assignment-section">
+              <div class="panel-title-row">
+                <div>
+                  <h3>Package nozzle sizes</h3>
+                  <p class="hint">Assign your physical nozzle size to each package. The OpenPnP script maps these sizes to your configured nozzle-tip names.</p>
+                </div>
+                <button id="autoAssignNozzlesBtn">Auto assign unassigned</button>
+              </div>
+              <div class="nozzle-assignment-list" id="nozzleAssignmentList">
+                <p class="hint">Loading package assignments...</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="view" id="settings">
           <header class="page-header">
             <div>
@@ -178,56 +249,11 @@
             </div>
             <div class="panel pricing-settings">
               <div>
-                <h3>LCSC pricing</h3>
-                <p class="hint">Refresh USD price breaks for every component with an LCSC part number. BOM estimates use the price break for the quantity needed on one board.</p>
-                <p class="pricing-status" id="pricingStatus">Pricing has not been updated in this session.</p>
+                <h3>Component data</h3>
+                <p class="hint">Update all components with current LCSC pricing, product photos, and missing EasyEDA package footprints. New footprints are shown for approval before they are saved.</p>
+                <p class="pricing-status" id="partUpdateStatus">Component data has not been updated in this session.</p>
               </div>
-              <button id="updatePricingBtn">Update LCSC pricing</button>
-            </div>
-            <div class="panel openpnp-export">
-              <div>
-                <h3>OpenPnP library export</h3>
-                <p class="hint">Download parts and package footprints, or use the additive script to add missing OpenPnP records without replacing configured footprints.</p>
-              </div>
-              <div class="openpnp-export-actions">
-                <button id="fetchEasyEdaFootprintsBtn">Fetch EasyEDA footprints</button>
-                <a class="button-link" href="/api/export/openpnp/parts.xml" download><span class="download-icon" aria-hidden="true"></span>Export parts.xml</a>
-                <a class="button-link" href="/api/export/openpnp/packages.xml" download><span class="download-icon" aria-hidden="true"></span>Export packages.xml</a>
-                <a class="button-link primary" href="/api/export/openpnp/import-script.js" download><span class="download-icon" aria-hidden="true"></span>Export import script</a>
-              </div>
-              <p class="openpnp-export-note">Put the script in OpenPnP's scripts directory, then run <strong>ReelKeeper_Import_Parts.js</strong> from the Scripts menu.</p>
-              <details class="category-prefix-reference">
-                <summary>Category prefix reference</summary>
-                <div class="category-prefix-grid">
-                  <span><strong>R</strong> Resistors</span>
-                  <span><strong>C</strong> Capacitors</span>
-                  <span><strong>L</strong> Inductors</span>
-                  <span><strong>D</strong> Diodes</span>
-                  <span><strong>LED</strong> LEDs</span>
-                  <span><strong>F</strong> Fuses</span>
-                  <span><strong>CN</strong> Connectors</span>
-                  <span><strong>IC</strong> ICs &amp; Modules</span>
-                  <span><strong>Q</strong> Transistors</span>
-                  <span><strong>SW</strong> Switches</span>
-                  <span><strong>Y</strong> Crystals &amp; Oscillators</span>
-                  <span><strong>X</strong> Uncategorized</span>
-                </div>
-              </details>
-              <section class="nozzle-assignment-section">
-                <div class="panel-title-row">
-                  <div>
-                    <h3>Package nozzle sizes</h3>
-                    <p class="hint">Assign your physical nozzle size to each package. The OpenPnP script maps these sizes to your configured nozzle-tip names.</p>
-                  </div>
-                  <button id="autoAssignNozzlesBtn">Auto assign unassigned</button>
-                </div>
-                <div class="nozzle-assignment-list" id="nozzleAssignmentList">
-                  <p class="hint">Loading package assignments...</p>
-                </div>
-              </section>
-              <div class="openpnp-readiness" id="openPnpReadiness" aria-live="polite">
-                <p class="hint">Checking footprint coverage...</p>
-              </div>
+              <button id="updateAllPartsBtn">Update all parts</button>
             </div>
             <div class="panel danger-zone">
               <div>
@@ -311,6 +337,7 @@
           <label>LCSC Part Number<input id="partLcsc" placeholder="C25804"></label>
           <label>Mouser Part Number<input id="partMouser"></label>
           <label>Package<input id="partPackage" placeholder="0603"></label>
+          <label>Height (mm)<input id="partHeightMm" type="number" min="0" step="0.01" placeholder="Automatic when known"></label>
           <label>Value<input id="partValue" placeholder="10k"></label>
           <label>Quantity<input id="partQuantity" type="number" min="0" step="1"></label>
           <label>Packaging

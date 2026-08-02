@@ -41,6 +41,11 @@ function readStore() {
   store.importBatches ||= [];
   store.bomMatchRules ||= [];
   store.openPnpNozzleAssignments ||= {};
+  store.parts.forEach((part) => {
+    if (Number(part.heightMm) > 0) return;
+    part.heightMm = defaultPartHeightMm(part);
+    part.heightSource = part.heightMm ? "ReelKeeper package default" : "";
+  });
   return store;
 }
 
@@ -86,6 +91,19 @@ function normalizePart(input, existing = {}) {
     createdAt: existing.createdAt || now(),
     updatedAt: now()
   };
+
+  const suppliedHeight = Number(input.heightMm ?? input.height);
+  const existingHeight = Number(existing.heightMm);
+  if (Number.isFinite(suppliedHeight) && suppliedHeight > 0) {
+    base.heightMm = suppliedHeight;
+    base.heightSource = text(input.heightSource) || "Manual";
+  } else if (Number.isFinite(existingHeight) && existingHeight > 0) {
+    base.heightMm = existingHeight;
+    base.heightSource = existing.heightSource || "Manual";
+  } else {
+    base.heightMm = defaultPartHeightMm(base);
+    base.heightSource = base.heightMm ? "ReelKeeper package default" : "";
+  }
 
   return { ...base, specs: deriveSpecs(base) };
 }
@@ -411,6 +429,8 @@ function normalizeImportKey(header) {
     designator: "designator",
     footprint: "footprint",
     package: "package",
+    height: "heightMm",
+    heightmm: "heightMm",
     value: "value",
     manufacturer: "manufacturer",
     supplier: "supplier",
@@ -589,6 +609,44 @@ const OPENPNP_COMMON_PACKAGES = {
 };
 
 const OPENPNP_NOZZLE_SIZES = ["40", "65", "140", "220", "400", "750"];
+
+const OPENPNP_PASSIVE_HEIGHTS_MM = {
+  "0201": { Resistors: 0.3, Capacitors: 0.33, default: 0.3 },
+  "0402": { Resistors: 0.35, Capacitors: 0.5, default: 0.45 },
+  "0603": { Resistors: 0.45, Capacitors: 0.8, default: 0.55 },
+  "0805": { Resistors: 0.55, Capacitors: 0.95, default: 0.7 },
+  "1206": { Resistors: 0.6, Capacitors: 1.1, default: 0.8 },
+  "1210": { Resistors: 0.6, Capacitors: 1.4, default: 1.0 }
+};
+
+const OPENPNP_PACKAGE_HEIGHT_RULES = [
+  [/\bSOT[-_ ]?23\b/i, 1.1],
+  [/\bSOT[-_ ]?89\b/i, 1.6],
+  [/\bSOT[-_ ]?223\b/i, 1.8],
+  [/\bSOD[-_ ]?123\b/i, 1.35],
+  [/\bSOD[-_ ]?323\b/i, 1.0],
+  [/\bSMA\b|DO[-_ ]?214AC/i, 2.3],
+  [/\bSMB\b|DO[-_ ]?214AA/i, 2.45],
+  [/\bSMC\b|DO[-_ ]?214AB/i, 2.6],
+  [/\bTSSOP\b|\bMSOP\b/i, 1.2],
+  [/\bSSOP\b|\bQSOP\b/i, 1.75],
+  [/\bSOIC\b|\bSOP\b/i, 1.75],
+  [/\bTQFP\b/i, 1.2],
+  [/\bLQFP\b|\bQFP\b/i, 1.6],
+  [/\bQFN\b/i, 1.0],
+  [/\bDFN\b|\bWSON\b/i, 0.8],
+  [/\bBGA\b/i, 1.2]
+];
+
+function defaultPartHeightMm(part) {
+  const packageName = String(part.openPnpPackageId || part.package || "").trim();
+  const passiveMatch = packageName.match(/(?:^|[^0-9])(0201|0402|0603|0805|1206|1210)(?:[^0-9]|$)/);
+  if (passiveMatch && ["Resistors", "Capacitors", "Inductors"].includes(part.category)) {
+    const defaults = OPENPNP_PASSIVE_HEIGHTS_MM[passiveMatch[1]];
+    return defaults[part.category] || defaults.default;
+  }
+  return OPENPNP_PACKAGE_HEIGHT_RULES.find(([pattern]) => pattern.test(packageName))?.[1] || 0;
+}
 
 function recommendedOpenPnpNozzleSize(footprint) {
   if (!footprint) return "";
@@ -816,6 +874,8 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       mouser: part.mouser || "",
       footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
       footprintSource: part.openPnpFootprint ? (part.openPnpFootprintSource || "EasyEDA") : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard package" : ""),
+      heightMm: Number(part.heightMm) || defaultPartHeightMm(part),
+      heightSource: part.heightSource || (defaultPartHeightMm(part) ? "ReelKeeper package default" : ""),
       partIds: [part.id],
       legacyIds: [...new Set([identity.legacyId, part.mpn, part.lcsc, part.mouser].filter(Boolean))]
     };
@@ -825,12 +885,16 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       return;
     }
     const preferred = candidate.quantity > existing.quantity ? candidate : existing;
+    const preferredHeight = [existing, candidate].find((item) => item.heightMm > 0 && item.heightSource === "Manual") ||
+      [existing, candidate].find((item) => item.heightMm > 0) || preferred;
     unique.set(key, {
       ...preferred,
       lcsc: existing.lcsc || candidate.lcsc,
       mouser: existing.mouser || candidate.mouser,
       footprint: existing.footprint || candidate.footprint,
       footprintSource: existing.footprintSource || candidate.footprintSource,
+      heightMm: preferredHeight.heightMm || 0,
+      heightSource: preferredHeight.heightSource || "",
       partIds: [...new Set([...(existing.partIds || []), ...(candidate.partIds || [])])],
       legacyIds: [...new Set([...(existing.legacyIds || []), ...(candidate.legacyIds || [])])]
     });
@@ -846,6 +910,8 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       footprintSource: part.footprintSource,
       partIds: part.partIds || [],
       legacyIds: part.legacyIds || [],
+      heightMm: part.heightMm || 0,
+      heightSource: part.heightSource || "",
       nozzleSize: part.nozzleSize || ""
     };
   }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
@@ -857,7 +923,7 @@ function escapeXml(value) {
 
 function buildOpenPnpPartsXml(parts) {
   const rows = openPnpParts(parts).map((part) =>
-    `  <part id="${escapeXml(part.id)}" name="${escapeXml(part.name)}" height-units="Millimeters" height="0.0" package-id="${escapeXml(part.packageId)}" speed="1.0"/>`
+    `  <part id="${escapeXml(part.id)}" name="${escapeXml(part.name)}" height-units="Millimeters" height="${escapeXml(part.heightMm || 0)}" package-id="${escapeXml(part.packageId)}" speed="1.0"/>`
   );
   return [`<?xml version="1.0" encoding="UTF-8"?>`, `<openpnp-parts>`, ...rows, `</openpnp-parts>`, ""].join("\n");
 }
@@ -891,6 +957,8 @@ function openPnpExportStatus(parts) {
       id: part.id,
       name: part.name,
       packageId: part.packageId,
+      heightMm: part.heightMm || 0,
+      heightSource: part.heightSource || "",
       ready: Boolean(footprint),
       source: part.footprintSource || "",
       issue,
@@ -898,10 +966,13 @@ function openPnpExportStatus(parts) {
     };
   });
   const ready = items.filter((item) => item.ready).length;
+  const heightsReady = items.filter((item) => item.heightMm > 0).length;
   return {
     total: items.length,
     ready,
     needsReview: items.length - ready,
+    heightsReady,
+    heightsMissing: items.length - heightsReady,
     items
   };
 }
@@ -958,6 +1029,8 @@ function buildOpenPnpImportScript(parts, nozzleAssignments = {}) {
 // Generated ${now()}. Existing IDs are preserved; legacy descriptions and EasyEDA package assignments may be cleaned up.
 var Part = Java.type("org.openpnp.model.Part");
 var Package = Java.type("org.openpnp.model.Package");
+var Length = Java.type("org.openpnp.model.Length");
+var LengthUnit = Java.type("org.openpnp.model.LengthUnit");
 var FootprintPad = Java.type("org.openpnp.model.Footprint$Pad");
 var JOptionPane = Java.type("javax.swing.JOptionPane");
 
@@ -966,6 +1039,7 @@ var addedParts = 0;
 var skippedParts = 0;
 var migratedLegacyParts = 0;
 var updatedPartNames = 0;
+var partHeightsAdded = 0;
 var addedPackages = 0;
 var addedFootprints = 0;
 var nozzleCompatibilitiesAdded = 0;
@@ -1075,6 +1149,10 @@ reelKeeperParts.forEach(function(item) {
       existingPart.setPackage(pkg);
       migratedLegacyParts++;
     }
+    if (item.heightMm > 0 && existingPart.getHeight().getValue() <= 0) {
+      existingPart.setHeight(new Length(item.heightMm, LengthUnit.Millimeters));
+      partHeightsAdded++;
+    }
     skippedParts++;
     return;
   }
@@ -1082,6 +1160,10 @@ reelKeeperParts.forEach(function(item) {
   var part = new Part(item.id);
   part.setName(item.name);
   part.setPackage(pkg);
+  if (item.heightMm > 0) {
+    part.setHeight(new Length(item.heightMm, LengthUnit.Millimeters));
+    partHeightsAdded++;
+  }
   part.setSpeed(1.0);
   config.addPart(part);
   addedParts++;
@@ -1091,6 +1173,7 @@ config.save();
 var summary = "ReelKeeper import complete.\\nAdded parts: " + addedParts +
   "\\nExisting parts skipped: " + skippedParts +
   "\\nPart names updated: " + updatedPartNames +
+  "\\nPart heights added: " + partHeightsAdded +
   "\\nLegacy package names updated: " + migratedLegacyParts +
   "\\nPackages created: " + addedPackages +
   "\\nFootprints added: " + addedFootprints +
@@ -1204,13 +1287,12 @@ app.post("/api/openpnp/nozzles/auto", (_req, res) => {
   res.json({ updated });
 });
 
-app.post("/api/openpnp/footprints/fetch", async (req, res) => {
-  const store = readStore();
-  const requestedIds = Array.isArray(req.body?.partIds) ? new Set(req.body.partIds.map(String)) : null;
+async function buildEasyEdaFootprintPreview(store, options = {}) {
+  const requestedIds = Array.isArray(options.partIds) ? new Set(options.partIds.map(String)) : null;
   const candidates = store.parts.filter((part) =>
     part.lcsc &&
     (!requestedIds || requestedIds.has(part.id)) &&
-    (req.body?.refresh === true || !part.openPnpFootprint)
+    (options.refresh === true || !part.openPnpFootprint)
   );
   const groups = new Map();
   candidates.forEach((part) => {
@@ -1235,7 +1317,39 @@ app.post("/api/openpnp/footprints/fetch", async (req, res) => {
   for (const [previewToken, preview] of openPnpFootprintPreviews) {
     if (Date.now() - preview.createdAt > 30 * 60 * 1000) openPnpFootprintPreviews.delete(previewToken);
   }
-  res.json({ token, items: results, skipped: store.parts.filter((part) => part.lcsc && part.openPnpFootprint).length });
+  return { token, items: results, skipped: store.parts.filter((part) => part.lcsc && part.openPnpFootprint).length };
+}
+
+async function updateLcscPartData(store, options = {}) {
+  const partNumbers = [...new Set(store.parts.map((part) => String(part.lcsc || "").trim().toUpperCase()).filter((value) => /^C\d+$/.test(value)))];
+  const results = [];
+  for (const lcsc of partNumbers) {
+    try {
+      const details = await lookupLcscDetails(lcsc, true);
+      if (options.requirePricing && !details.priceBreaks.length) throw new Error("No USD pricing found");
+      if (!details.priceBreaks.length && !details.photoUrl) throw new Error("No product data found");
+      const updatedAt = now();
+      store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc).forEach((part) => {
+        if (details.priceBreaks.length) {
+          part.priceBreaks = details.priceBreaks;
+          part.priceCurrency = "USD";
+          part.priceSource = "LCSC";
+          part.priceUpdatedAt = updatedAt;
+        }
+        if (details.photoUrl) part.photoUrl = details.photoUrl;
+        part.updatedAt = updatedAt;
+      });
+      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length, photo: Boolean(details.photoUrl) });
+    } catch (error) {
+      results.push({ lcsc, ok: false, error: error.message || "LCSC lookup failed" });
+    }
+  }
+  return { total: partNumbers.length, updated: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, results };
+}
+
+app.post("/api/openpnp/footprints/fetch", async (req, res) => {
+  const store = readStore();
+  res.json(await buildEasyEdaFootprintPreview(store, req.body || {}));
 });
 
 app.post("/api/openpnp/footprints/approve", (req, res) => {
@@ -1364,28 +1478,28 @@ app.post("/api/reset", (_req, res) => {
 
 app.post("/api/pricing/lcsc/update", async (_req, res) => {
   const store = readStore();
-  const partNumbers = [...new Set(store.parts.map((part) => String(part.lcsc || "").trim().toUpperCase()).filter((value) => /^C\d+$/.test(value)))];
-  const results = [];
-  for (const lcsc of partNumbers) {
-    try {
-      const details = await lookupLcscDetails(lcsc, true);
-      if (!details.priceBreaks.length) throw new Error("No USD pricing found");
-      const updatedAt = now();
-      store.parts.filter((part) => String(part.lcsc || "").trim().toUpperCase() === lcsc).forEach((part) => {
-        part.priceBreaks = details.priceBreaks;
-        part.priceCurrency = "USD";
-        part.priceSource = "LCSC";
-        part.priceUpdatedAt = updatedAt;
-        if (!part.photoUrl && details.photoUrl) part.photoUrl = details.photoUrl;
-        part.updatedAt = updatedAt;
-      });
-      results.push({ lcsc, ok: true, priceBreaks: details.priceBreaks.length });
-    } catch (error) {
-      results.push({ lcsc, ok: false, error: error.message || "Pricing lookup failed" });
-    }
-  }
+  const result = await updateLcscPartData(store, { requirePricing: true });
   writeStore(store);
-  res.json({ total: partNumbers.length, updated: results.filter((item) => item.ok).length, failed: results.filter((item) => !item.ok).length, results });
+  res.json(result);
+});
+
+app.post("/api/parts/update-all", async (_req, res) => {
+  const store = readStore();
+  const pricing = await updateLcscPartData(store);
+  writeStore(store);
+  const footprints = await buildEasyEdaFootprintPreview(store);
+  if (pricing.total) {
+    store.movements.unshift({
+      id: `move_${Date.now()}`,
+      type: "part-data-update",
+      partName: `${pricing.updated} LCSC part${pricing.updated === 1 ? "" : "s"}`,
+      delta: 0,
+      source: "LCSC and EasyEDA",
+      at: now()
+    });
+    writeStore(store);
+  }
+  res.json({ pricing, footprints });
 });
 
 app.post("/api/import/mouser/preview", (req, res) => {
@@ -1598,8 +1712,8 @@ app.get("/api/docs", (_req, res) => {
     baseUrl: "/api",
     endpoints: [
       { method: "GET", path: "/parts", description: "List inventory. Optional query params: q, category, low=true." },
-      { method: "POST", path: "/parts", description: "Create a part." },
-      { method: "PATCH", path: "/parts/:id", description: "Update a part." },
+      { method: "POST", path: "/parts", description: "Create a part. Optional heightMm overrides the package-based OpenPnP height default." },
+      { method: "PATCH", path: "/parts/:id", description: "Update a part, including its OpenPnP placement height with heightMm." },
       { method: "DELETE", path: "/parts/:id", description: "Delete a part." },
       { method: "POST", path: "/import/order", description: "Import purchased parts. Body: { rows: [{ lcsc, mpn, name, quantity, category, package, value, manufacturer }] }." },
       { method: "POST", path: "/import/mouser/preview", description: "Parse a Mouser .xls or .xlsx order before importing. Body: { fileName, fileBase64 }." },
@@ -1609,6 +1723,7 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/upload", description: "Upload an XLSX BOM as base64. Body: { fileName, fileBase64 }. Returns compatible stock matches and shortages." },
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
       { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
+      { method: "POST", path: "/parts/update-all", description: "Refresh LCSC pricing and photos, then fetch missing EasyEDA footprint previews for approval." },
       { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
       { method: "GET", path: "/export/openpnp/packages.xml", description: "Download OpenPnP packages.xml with generated footprints for standard two-terminal passive packages." },
       { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },
