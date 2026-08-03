@@ -16,6 +16,7 @@ ReelKeeper is a self hosted inventory management software for PCB components. I 
 - Export OpenPnP `parts.xml` and `packages.xml` files or an additive library-import script. Part IDs use readable names, category prefixes, and LCSC or Mouser numbers so similar components remain distinguishable.
 - Retrieve exact package pad geometry from EasyEDA using LCSC numbers, preview footprints before approval, and manually map uncertain components to known packages already in the library.
 - Assign ReelKeeper nozzle sizes to OpenPnP packages. The import script can map those sizes to the nozzle-tip names configured on your machine and apply compatible nozzle tips automatically.
+- Exclude loose-only stock from OpenPnP exports and board assignments with a persistent General setting; components that also have machine-ready stock remain available.
 - Store component heights for OpenPnP using datasheet dimensions, package defaults, or manual review. Datasheets are downloaded with component data and available in the built-in review viewer.
 - Use the authenticated AI Part Review API to review only components missing verified heights and submit evidence-backed results without embedding AI in ReelKeeper.
 - Upload a board BOM and export an OpenPnP assignment script that connects every designator to an existing library part by LCSC number. Missing parts, missing LCSC numbers, and conflicting designators are reported before download.

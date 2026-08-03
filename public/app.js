@@ -919,6 +919,32 @@ async function loadDocs() {
   $("#apiDocs").innerHTML = `<code>${escapeHtml(JSON.stringify(docs, null, 2))}</code>`;
 }
 
+async function loadGeneralSettings() {
+  try {
+    const settings = await api("/api/settings/general");
+    $("#excludeLooseFromOpenPnp").checked = settings.openPnpExcludeLooseStock;
+  } catch (error) {
+    window.alert(`Settings could not be loaded: ${error.message}`);
+  }
+}
+
+async function saveOpenPnpLooseStockSetting(event) {
+  const input = event.target;
+  input.disabled = true;
+  try {
+    const settings = await api("/api/settings/general", {
+      method: "PATCH",
+      body: JSON.stringify({ openPnpExcludeLooseStock: input.checked })
+    });
+    input.checked = settings.openPnpExcludeLooseStock;
+  } catch (error) {
+    input.checked = !input.checked;
+    window.alert(`Setting could not be saved: ${error.message}`);
+  } finally {
+    input.disabled = false;
+  }
+}
+
 async function loadHeightReviewApi() {
   $$('[data-height-api-origin]').forEach((element) => { element.textContent = window.location.origin; });
   try {
@@ -1378,7 +1404,8 @@ function auditActionLabel(type) {
     "part-data-update": "Component data updated",
     "height-verify": "Component height verified",
     "height-reset": "All component heights deleted",
-    "height-ai-review": "Component height set by AI review"
+    "height-ai-review": "Component height set by AI review",
+    "settings-update": "General setting changed"
   })[type] || type;
 }
 
@@ -1441,6 +1468,7 @@ function activateView(viewId, options = {}) {
   if (normalized === "settings") {
     loadDocs();
     loadImportHistory();
+    loadGeneralSettings();
   }
   if (normalized === "openpnp") {
     loadOpenPnpReadiness();
@@ -1463,6 +1491,7 @@ function activateSettingsPanel(panelId) {
   $$(".settings-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.settingsPanel === panelId));
   $$(".settings-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `settings-${panelId}`));
   if (panelId === "api") loadDocs();
+  if (panelId === "general") loadGeneralSettings();
   if (panelId === "history") loadImportHistory();
   if (panelId === "audit") loadAuditLog();
 }
@@ -1518,6 +1547,7 @@ function bindEvents() {
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);
   $("#updateAllPartsBtn")?.addEventListener("click", updateAllParts);
+  $("#excludeLooseFromOpenPnp")?.addEventListener("change", saveOpenPnpLooseStockSetting);
   $("#closeFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);

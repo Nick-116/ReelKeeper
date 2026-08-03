@@ -351,6 +351,17 @@ Content-Type: application/json
               <h3>Part matching</h3>
               <p class="hint">ReelKeeper matches imported rows by LCSC part number first, then manufacturer part number, then compatible passive specs where safe.</p>
             </div>
+            <div class="panel settings-option-row">
+              <div>
+                <h3>OpenPnP loose stock</h3>
+                <p class="hint">Exclude loose-only components from OpenPnP library exports, package setup, and board assignments. Components with machine-ready stock remain available.</p>
+              </div>
+              <label class="switch-control">
+                <input id="excludeLooseFromOpenPnp" type="checkbox">
+                <span class="switch-track" aria-hidden="true"></span>
+                <span>Exclude loose stock</span>
+              </label>
+            </div>
             <div class="panel pricing-settings">
               <div>
                 <h3>Component data</h3>

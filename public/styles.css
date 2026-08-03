@@ -786,6 +786,63 @@ img.component-thumb:hover {
 .pricing-settings .hint,
 .pricing-status { margin-bottom: 0; }
 
+.settings-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings-option-row .hint { margin-bottom: 0; }
+
+.switch-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex: 0 0 auto;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.switch-control input {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  width: 44px;
+  height: 24px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: #aeb8b4;
+  transition: background 150ms ease;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+  transition: transform 150ms ease;
+}
+
+.switch-control input:checked + .switch-track { background: var(--accent); }
+.switch-control input:checked + .switch-track::after { transform: translateX(20px); }
+.switch-control input:focus-visible + .switch-track { outline: 3px solid rgba(13, 137, 112, 0.25); }
+.switch-control input:disabled + .switch-track { opacity: 0.55; }
+
 .openpnp-export {
   display: grid;
   gap: 0.85rem;
@@ -1747,8 +1804,11 @@ dialog h3 {
   }
 
   .bom-cost-summary,
-  .pricing-settings {
+  .pricing-settings,
+  .settings-option-row {
     align-items: stretch;
     flex-direction: column;
   }
+
+  .switch-control { align-self: flex-start; }
 }

@@ -24,6 +24,7 @@ function seedData() {
     importBatches: [],
     bomMatchRules: [],
     openPnpNozzleAssignments: {},
+    settings: { openPnpExcludeLooseStock: true },
     heightReviewApiKeyHash: ""
   };
 }
@@ -43,6 +44,8 @@ function readStore() {
   store.importBatches ||= [];
   store.bomMatchRules ||= [];
   store.openPnpNozzleAssignments ||= {};
+  store.settings ||= {};
+  if (typeof store.settings.openPnpExcludeLooseStock !== "boolean") store.settings.openPnpExcludeLooseStock = true;
   store.heightReviewApiKeyHash ||= "";
   store.parts.forEach((part) => {
     if (Number(part.heightMm) > 0 || part.heightDefaultSuppressed) return;
@@ -50,6 +53,12 @@ function readStore() {
     part.heightSource = part.heightMm ? "ReelKeeper package default" : "";
   });
   return store;
+}
+
+function openPnpEligibleParts(store) {
+  return store.settings.openPnpExcludeLooseStock
+    ? store.parts.filter((part) => normalizeStorageType(part.storageType) !== "loose")
+    : store.parts;
 }
 
 function writeStore(store) {
@@ -1509,24 +1518,24 @@ app.get("/api/export/openpnp/parts.xml", (_req, res) => {
   const store = readStore();
   res.setHeader("Content-Type", "application/xml; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="reelkeeper-openpnp-parts.xml"');
-  res.send(buildOpenPnpPartsXml(store.parts));
+  res.send(buildOpenPnpPartsXml(openPnpEligibleParts(store)));
 });
 
 app.get("/api/export/openpnp/packages.xml", (_req, res) => {
   const store = readStore();
   res.setHeader("Content-Type", "application/xml; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="reelkeeper-openpnp-packages.xml"');
-  res.send(buildOpenPnpPackagesXml(store.parts));
+  res.send(buildOpenPnpPackagesXml(openPnpEligibleParts(store)));
 });
 
 app.get("/api/export/openpnp/status", (_req, res) => {
   const store = readStore();
-  res.json(openPnpExportStatus(store.parts));
+  res.json(openPnpExportStatus(openPnpEligibleParts(store)));
 });
 
 app.get("/api/openpnp/packages/known", (_req, res) => {
   const store = readStore();
-  const packages = knownOpenPnpPackages(store.parts).map(({ footprint, ...pkg }) => pkg);
+  const packages = knownOpenPnpPackages(openPnpEligibleParts(store)).map(({ footprint, ...pkg }) => pkg);
   res.json({ packages });
 });
 
@@ -1563,7 +1572,7 @@ app.post("/api/openpnp/packages/assign", (req, res) => {
 
 app.get("/api/openpnp/nozzles", (_req, res) => {
   const store = readStore();
-  const packages = openPnpPackages(store.parts, store.openPnpNozzleAssignments).map((pkg) => ({
+  const packages = openPnpPackages(openPnpEligibleParts(store), store.openPnpNozzleAssignments).map((pkg) => ({
     packageId: pkg.id,
     assignedSize: store.openPnpNozzleAssignments[pkg.id] || "",
     recommendedSize: recommendedOpenPnpNozzleSize(pkg.footprint),
@@ -1579,7 +1588,7 @@ app.post("/api/openpnp/nozzles/assign", (req, res) => {
   if (!packageId) return res.status(400).json({ error: "Package is required." });
   if (size && !OPENPNP_NOZZLE_SIZES.includes(size)) return res.status(400).json({ error: "Unknown ReelKeeper nozzle size." });
   const store = readStore();
-  const available = openPnpPackages(store.parts, store.openPnpNozzleAssignments).some((pkg) => pkg.id === packageId);
+  const available = openPnpPackages(openPnpEligibleParts(store), store.openPnpNozzleAssignments).some((pkg) => pkg.id === packageId);
   if (!available) return res.status(404).json({ error: "Package not found in the component library." });
   if (size) store.openPnpNozzleAssignments[packageId] = size;
   else delete store.openPnpNozzleAssignments[packageId];
@@ -1591,7 +1600,7 @@ app.post("/api/openpnp/nozzles/assign", (req, res) => {
 app.post("/api/openpnp/nozzles/auto", (_req, res) => {
   const store = readStore();
   let updated = 0;
-  openPnpPackages(store.parts, store.openPnpNozzleAssignments).forEach((pkg) => {
+  openPnpPackages(openPnpEligibleParts(store), store.openPnpNozzleAssignments).forEach((pkg) => {
     if (store.openPnpNozzleAssignments[pkg.id]) return;
     const size = recommendedOpenPnpNozzleSize(pkg.footprint);
     if (!size) return;
@@ -2066,7 +2075,7 @@ app.get("/api/export/openpnp/import-script.js", (_req, res) => {
   const store = readStore();
   res.setHeader("Content-Type", "text/javascript; charset=utf-8");
   res.setHeader("Content-Disposition", 'attachment; filename="ReelKeeper_Import_Parts.js"');
-  res.send(buildOpenPnpImportScript(store.parts, store.openPnpNozzleAssignments));
+  res.send(buildOpenPnpImportScript(openPnpEligibleParts(store), store.openPnpNozzleAssignments));
 });
 
 app.post("/api/export/openpnp/bom-assignment-script", async (req, res) => {
@@ -2075,7 +2084,8 @@ app.post("/api/export/openpnp/bom-assignment-script", async (req, res) => {
     const buffer = Buffer.from(String(req.body?.fileBase64 || ""), "base64");
     if (!buffer.length) return res.status(400).json({ error: "A BOM file is required" });
     const rows = /\.xlsx$/i.test(fileName) ? await parseXlsxBom(buffer) : parseDelimitedBom(buffer);
-    const plan = openPnpBomAssignmentPlan(readStore().parts, rows);
+    const store = readStore();
+    const plan = openPnpBomAssignmentPlan(openPnpEligibleParts(store), rows);
     res.json({
       fileName,
       rowCount: rows.length,
@@ -2169,6 +2179,26 @@ app.post("/api/reset", (_req, res) => {
   writeStore(seedData());
   lcscDetailsCache.clear();
   res.json({ ok: true });
+});
+
+app.get("/api/settings/general", (_req, res) => {
+  const store = readStore();
+  res.json({ openPnpExcludeLooseStock: store.settings.openPnpExcludeLooseStock });
+});
+
+app.patch("/api/settings/general", (req, res) => {
+  if (typeof req.body?.openPnpExcludeLooseStock !== "boolean") {
+    return res.status(400).json({ error: "openPnpExcludeLooseStock must be true or false" });
+  }
+  const store = readStore();
+  store.settings.openPnpExcludeLooseStock = req.body.openPnpExcludeLooseStock;
+  recordMovement(store, {
+    type: "settings-update",
+    delta: 0,
+    source: req.body.openPnpExcludeLooseStock ? "Loose stock excluded from OpenPnP" : "Loose stock included in OpenPnP"
+  });
+  writeStore(store);
+  res.json({ openPnpExcludeLooseStock: store.settings.openPnpExcludeLooseStock });
 });
 
 app.post("/api/pricing/lcsc/update", async (_req, res) => {
@@ -2428,6 +2458,8 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
       { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
       { method: "POST", path: "/parts/update-all", description: "Refresh LCSC pricing and photos, cache missing datasheets, then fetch missing EasyEDA footprint previews for approval." },
+      { method: "GET", path: "/settings/general", description: "Read general settings, including whether loose stock is excluded from OpenPnP exports." },
+      { method: "PATCH", path: "/settings/general", description: "Update general settings. Body: { openPnpExcludeLooseStock: true }." },
       { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
       { method: "GET", path: "/export/openpnp/packages.xml", description: "Download OpenPnP packages.xml with generated footprints for standard two-terminal passive packages." },
       { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },
