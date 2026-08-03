@@ -802,6 +802,65 @@ img.component-thumb:hover {
   gap: 0.65rem;
 }
 
+.ai-review-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ai-review-intro .hint {
+  margin: 0;
+  max-width: 760px;
+}
+
+.api-key-actions,
+.api-key-display {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.api-key-display code {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  background: #f7faf9;
+}
+
+.ai-review-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.ai-review-grid pre {
+  max-height: 430px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.api-connection-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.6rem 1rem;
+  margin: 0;
+}
+
+.api-connection-details dt {
+  font-weight: 700;
+}
+
+.api-connection-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 #openpnp-packages .openpnp-export-actions button {
   white-space: nowrap;
 }
@@ -1553,6 +1612,17 @@ dialog h3 {
   #openpnp-packages .panel-title-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .ai-review-intro,
+  .api-key-actions,
+  .api-key-display {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ai-review-grid {
+    grid-template-columns: 1fr;
   }
 
   .nozzle-assignment-row select {

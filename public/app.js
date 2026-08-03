@@ -13,6 +13,7 @@ const state = {
   heightReviewJobDone: false,
   heightReviewJobTotal: 0,
   heightReviewPollTimer: null,
+  heightApiKeyConfigured: false,
   openPnpIssues: [],
   knownOpenPnpPackages: []
 };
@@ -875,6 +876,53 @@ async function loadDocs() {
   $("#apiDocs").innerHTML = `<code>${escapeHtml(JSON.stringify(docs, null, 2))}</code>`;
 }
 
+async function loadHeightReviewApi() {
+  $$('[data-height-api-origin]').forEach((element) => { element.textContent = window.location.origin; });
+  try {
+    const status = await api("/api/height-review/key");
+    state.heightApiKeyConfigured = status.configured;
+    $("#heightApiKeyStatus").textContent = status.configured ? `API key configured · ${status.managedBy}` : "API key not configured";
+    $("#generateHeightApiKeyBtn").textContent = status.managedBy === "environment" ? "Managed by environment" : (status.configured ? "Generate replacement key" : "Generate API key");
+    $("#generateHeightApiKeyBtn").disabled = status.managedBy === "environment";
+    $("#currentHeightApiKeyField").classList.toggle("hidden", !status.configured || status.managedBy === "environment");
+  } catch (error) {
+    $("#heightApiKeyStatus").textContent = error.message;
+  }
+}
+
+async function generateHeightReviewApiKey() {
+  if (state.heightApiKeyConfigured && !window.confirm("Generate a replacement height-review API key? The existing key will stop working immediately.")) return;
+  const button = $("#generateHeightApiKeyBtn");
+  button.disabled = true;
+  try {
+    const currentKey = $("#currentHeightApiKey").value.trim();
+    const result = await api("/api/height-review/key/regenerate", {
+      method: "POST",
+      headers: currentKey ? { Authorization: `Bearer ${currentKey}` } : {},
+      body: "{}"
+    });
+    $("#currentHeightApiKey").value = "";
+    $("#heightApiKeyValue").textContent = result.apiKey;
+    $("#heightApiKeyResult").classList.remove("hidden");
+    await loadHeightReviewApi();
+  } catch (error) {
+    window.alert(`API key could not be generated: ${error.message}`);
+  } finally {
+    if (!$("#generateHeightApiKeyBtn").disabled || !state.heightApiKeyConfigured) button.disabled = false;
+  }
+}
+
+async function copyText(value, button) {
+  try {
+    await navigator.clipboard.writeText(value);
+    const original = button.textContent;
+    button.textContent = "Copied";
+    window.setTimeout(() => { button.textContent = original; }, 1200);
+  } catch (_error) {
+    window.alert("Copying was blocked by the browser. Select the text and copy it manually.");
+  }
+}
+
 async function loadOpenPnpReadiness() {
   const container = $("#openPnpReadiness");
   if (!container) return;
@@ -1041,7 +1089,7 @@ function renderHeightReview() {
   $("#approveHeightBtn").disabled = false;
   const viewer = $("#heightDatasheetViewer");
   viewer.innerHTML = item.hasDatasheet
-    ? `<iframe title="Datasheet for ${escapeHtml(item.name)}" src="${item.datasheetUrl}#page=${item.page || 1}&zoom=170"></iframe>`
+    ? `<iframe title="Datasheet for ${escapeHtml(item.name)}" src="${item.datasheetUrl}#page=${item.page || 1}&zoom=100"></iframe>`
     : `<div class="datasheet-unavailable"><strong>Datasheet unavailable</strong><span>${escapeHtml(item.error || "No datasheet could be located for this component.")}</span></div>`;
 }
 
@@ -1286,7 +1334,8 @@ function auditActionLabel(type) {
     "nozzle-auto": "Nozzle sizes recommended",
     "part-data-update": "Component data updated",
     "height-verify": "Component height verified",
-    "height-reset": "All component heights deleted"
+    "height-reset": "All component heights deleted",
+    "height-ai-review": "Component height set by AI review"
   })[type] || type;
 }
 
@@ -1380,6 +1429,7 @@ function activateOpenPnpPanel(panelId) {
   $$(".openpnp-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `openpnp-${panelId}`));
   if (panelId === "packages") loadOpenPnpReadiness();
   if (panelId === "nozzles") loadNozzleAssignments();
+  if (panelId === "ai-review") loadHeightReviewApi();
 }
 
 function bindEvents() {
@@ -1430,6 +1480,9 @@ function bindEvents() {
   $("#autoAssignNozzlesBtn")?.addEventListener("click", autoAssignNozzles);
   $("#reviewPartHeightsBtn")?.addEventListener("click", beginHeightReview);
   $("#deleteAllHeightsBtn")?.addEventListener("click", deleteAllPartHeights);
+  $("#generateHeightApiKeyBtn")?.addEventListener("click", generateHeightReviewApiKey);
+  $("#copyHeightApiKeyBtn")?.addEventListener("click", () => copyText($("#heightApiKeyValue").textContent, $("#copyHeightApiKeyBtn")));
+  $("#copyAiHeightPromptBtn")?.addEventListener("click", () => copyText($("#aiHeightReviewPrompt").innerText, $("#copyAiHeightPromptBtn")));
   $("#closeHeightReviewBtn")?.addEventListener("click", closeHeightReview);
   $("#previousHeightBtn")?.addEventListener("click", () => moveHeightReview(-1));
   $("#skipHeightBtn")?.addEventListener("click", () => moveHeightReview(1));

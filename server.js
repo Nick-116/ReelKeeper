@@ -1,7 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { randomUUID } = require("crypto");
+const { createHash, randomBytes, randomUUID, timingSafeEqual } = require("crypto");
 const yauzl = require("yauzl");
 const XLSX = require("@e965/xlsx");
 
@@ -23,7 +23,8 @@ function seedData() {
     movements: [],
     importBatches: [],
     bomMatchRules: [],
-    openPnpNozzleAssignments: {}
+    openPnpNozzleAssignments: {},
+    heightReviewApiKeyHash: ""
   };
 }
 
@@ -42,6 +43,7 @@ function readStore() {
   store.importBatches ||= [];
   store.bomMatchRules ||= [];
   store.openPnpNozzleAssignments ||= {};
+  store.heightReviewApiKeyHash ||= "";
   store.parts.forEach((part) => {
     if (Number(part.heightMm) > 0 || part.heightDefaultSuppressed) return;
     part.heightMm = defaultPartHeightMm(part);
@@ -54,6 +56,27 @@ function writeStore(store) {
   const tmp = `${dataFile}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
   fs.renameSync(tmp, dataFile);
+}
+
+function hashApiKey(value) {
+  return createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function secureEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireHeightReviewApiKey(req, res, next) {
+  const supplied = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "").trim() || String(req.get("x-reelkeeper-key") || "").trim();
+  const environmentKey = String(process.env.HEIGHT_REVIEW_API_KEY || "").trim();
+  const storedHash = readStore().heightReviewApiKeyHash;
+  const valid = environmentKey
+    ? secureEqual(supplied, environmentKey)
+    : Boolean(storedHash && secureEqual(hashApiKey(supplied), storedHash));
+  if (!valid) return res.status(401).json({ error: "A valid height-review API key is required" });
+  next();
 }
 
 function normalizePart(input, existing = {}) {
@@ -1615,7 +1638,7 @@ async function prepareHeightReviewPart(part) {
 app.post("/api/openpnp/heights/review/start", (_req, res) => {
   const store = readStore();
   const groups = new Map();
-  store.parts.forEach((part) => {
+  store.parts.filter((part) => Number(part.heightMm) <= 0).forEach((part) => {
     const key = String(part.lcsc || part.id).toUpperCase();
     if (!groups.has(key)) groups.set(key, { ...part });
   });
@@ -1646,7 +1669,7 @@ app.get("/api/openpnp/heights/review/:id", (req, res) => {
 app.post("/api/openpnp/heights/prepare", async (_req, res) => {
   const store = readStore();
   const groups = new Map();
-  store.parts.forEach((part) => {
+  store.parts.filter((part) => Number(part.heightMm) <= 0).forEach((part) => {
     const key = String(part.lcsc || part.id).toUpperCase();
     if (!groups.has(key)) groups.set(key, part);
   });
@@ -1769,6 +1792,128 @@ app.delete("/api/openpnp/heights", (_req, res) => {
   });
   writeStore(store);
   res.json({ cleared: store.parts.length });
+});
+
+app.get("/api/height-review/key", (_req, res) => {
+  const configuredByEnvironment = Boolean(String(process.env.HEIGHT_REVIEW_API_KEY || "").trim());
+  res.json({ configured: configuredByEnvironment || Boolean(readStore().heightReviewApiKeyHash), managedBy: configuredByEnvironment ? "environment" : "ReelKeeper" });
+});
+
+app.post("/api/height-review/key/regenerate", (_req, res) => {
+  if (String(process.env.HEIGHT_REVIEW_API_KEY || "").trim()) {
+    return res.status(409).json({ error: "The height-review key is managed by HEIGHT_REVIEW_API_KEY in the container environment" });
+  }
+  const store = readStore();
+  if (store.heightReviewApiKeyHash) {
+    const supplied = String(_req.get("authorization") || "").replace(/^Bearer\s+/i, "").trim() || String(_req.get("x-reelkeeper-key") || "").trim();
+    if (!secureEqual(hashApiKey(supplied), store.heightReviewApiKeyHash)) return res.status(401).json({ error: "The current API key is required to generate a replacement" });
+  }
+  const apiKey = `rk_height_${randomBytes(24).toString("base64url")}`;
+  store.heightReviewApiKeyHash = hashApiKey(apiKey);
+  writeStore(store);
+  res.json({ apiKey, message: "Store this key now. ReelKeeper cannot display it again." });
+});
+
+app.get("/api/height-review/pending", requireHeightReviewApiKey, (req, res) => {
+  const store = readStore();
+  const limit = Math.min(250, Math.max(1, Number(req.query.limit) || 100));
+  const includeNeedsReview = String(req.query.includeNeedsReview || "").toLowerCase() === "true";
+  const groups = new Map();
+  store.parts.filter((part) => Number(part.heightMm) <= 0 && (includeNeedsReview || part.heightAiReviewStatus !== "needs-review")).forEach((part) => {
+    const key = String(part.lcsc || part.id).toUpperCase();
+    if (!groups.has(key)) groups.set(key, part);
+  });
+  const items = [...groups.values()].slice(0, limit).map((part) => ({
+    partId: part.id,
+    name: part.name,
+    category: part.category || "",
+    manufacturer: part.manufacturer || "",
+    manufacturerPartNumber: part.mpn || "",
+    lcscPartNumber: part.lcsc || "",
+    mouserPartNumber: part.mouser || "",
+    package: part.package || "",
+    value: part.value || "",
+    datasheetAvailable: Boolean(part.datasheetFile || part.datasheetUrl || part.lcsc),
+    datasheetUrl: `/api/height-review/${encodeURIComponent(part.id)}/datasheet`,
+    previousReview: part.heightAiReviewStatus === "needs-review" ? {
+      status: "needs-review",
+      reason: part.heightAiReviewReason || "",
+      reviewedAt: part.heightAiReviewedAt || ""
+    } : null
+  }));
+  res.json({ total: groups.size, returned: items.length, includeNeedsReview, items });
+});
+
+app.get("/api/height-review/:partId/datasheet", requireHeightReviewApiKey, async (req, res) => {
+  const store = readStore();
+  const part = store.parts.find((item) => item.id === req.params.partId);
+  if (!part) return res.status(404).json({ error: "Component not found" });
+  if (Number(part.heightMm) > 0) return res.status(409).json({ error: "This component already has a height" });
+  try {
+    const downloaded = await ensurePartDatasheet(part);
+    const matchingParts = part.lcsc
+      ? store.parts.filter((item) => String(item.lcsc).toUpperCase() === String(part.lcsc).toUpperCase())
+      : [part];
+    matchingParts.forEach((item) => {
+      item.datasheetUrl = part.datasheetUrl;
+      item.datasheetFile = downloaded.fileName;
+      item.datasheetUpdatedAt = part.datasheetUpdatedAt;
+    });
+    writeStore(store);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${downloaded.fileName.replace(/"/g, "")}"`);
+    res.sendFile(downloaded.filePath);
+  } catch (error) {
+    res.status(404).json({ error: error.message || "Datasheet could not be retrieved" });
+  }
+});
+
+app.post("/api/height-review/:partId/result", requireHeightReviewApiKey, (req, res) => {
+  const status = String(req.body?.status || "").trim().toLowerCase();
+  if (!["approved", "needs-review"].includes(status)) return res.status(400).json({ error: "status must be approved or needs-review" });
+  const store = readStore();
+  const selected = store.parts.find((part) => part.id === req.params.partId);
+  if (!selected) return res.status(404).json({ error: "Component not found" });
+  if (Number(selected.heightMm) > 0) return res.status(409).json({ error: "This component already has a height and cannot be changed through the AI review API" });
+  const matchingParts = selected.lcsc
+    ? store.parts.filter((part) => String(part.lcsc).toUpperCase() === String(selected.lcsc).toUpperCase())
+    : [selected];
+  const reviewedAt = now();
+  if (status === "needs-review") {
+    const reason = String(req.body?.reason || "").trim().slice(0, 1000);
+    if (!reason) return res.status(400).json({ error: "reason is required when status is needs-review" });
+    matchingParts.forEach((part) => {
+      part.heightAiReviewStatus = "needs-review";
+      part.heightAiReviewReason = reason;
+      part.heightAiReviewedAt = reviewedAt;
+      part.updatedAt = reviewedAt;
+    });
+    writeStore(store);
+    return res.json({ status, updated: matchingParts.length, partId: selected.id });
+  }
+  const heightMm = Number(req.body?.heightMm);
+  if (!Number.isFinite(heightMm) || heightMm < 0.1 || heightMm > 100) return res.status(400).json({ error: "heightMm must be between 0.1 and 100" });
+  const page = Math.max(1, Number(req.body?.datasheetPage) || 1);
+  const evidence = String(req.body?.evidence || "").trim().slice(0, 1000);
+  if (!evidence) return res.status(400).json({ error: "evidence is required for an approved height" });
+  const confidence = String(req.body?.confidence || "").trim().toLowerCase();
+  if (!["high", "medium"].includes(confidence)) return res.status(400).json({ error: "confidence must be high or medium; uncertain results should use needs-review" });
+  matchingParts.forEach((part) => {
+    part.heightMm = heightMm;
+    part.heightSource = "AI datasheet review";
+    part.heightDefaultSuppressed = false;
+    part.heightVerifiedAt = reviewedAt;
+    part.heightDatasheetPage = page;
+    part.heightEvidence = evidence;
+    part.heightReviewConfidence = confidence;
+    part.heightAiReviewStatus = "approved";
+    part.heightAiReviewReason = "";
+    part.heightAiReviewedAt = reviewedAt;
+    part.updatedAt = reviewedAt;
+  });
+  store.movements.unshift({ id: `move_${Date.now()}`, type: "height-ai-review", partId: selected.id, partName: selected.name, delta: 0, source: `${heightMm} mm · ${confidence} confidence`, at: reviewedAt });
+  writeStore(store);
+  res.json({ status, updated: matchingParts.length, partId: selected.id, heightMm, confidence });
 });
 
 app.get("/api/export/openpnp/import-script.js", (_req, res) => {
@@ -2132,6 +2277,9 @@ app.get("/api/docs", (_req, res) => {
       { method: "GET", path: "/openpnp/heights/datasheet/:partId", description: "Open a locally stored component datasheet for height review." },
       { method: "POST", path: "/openpnp/heights/approve", description: "Save an approved per-part height. Body: { partId, heightMm, page, evidence }." },
       { method: "DELETE", path: "/openpnp/heights", description: "Delete all stored and package-default component heights." },
+      { method: "GET", path: "/height-review/pending", authentication: "Bearer height-review API key", description: "List unique components that do not have a height. Optional query params: limit and includeNeedsReview=true." },
+      { method: "GET", path: "/height-review/:partId/datasheet", authentication: "Bearer height-review API key", description: "Download or retrieve the stored PDF datasheet for one pending component." },
+      { method: "POST", path: "/height-review/:partId/result", authentication: "Bearer height-review API key", description: "Submit an approved height with evidence, or mark an ambiguous component as needs-review." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],

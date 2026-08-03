@@ -166,6 +166,7 @@
             <button class="openpnp-tab active" data-openpnp-panel="library">Library Export</button>
             <button class="openpnp-tab" data-openpnp-panel="packages">Packages &amp; Part Heights</button>
             <button class="openpnp-tab" data-openpnp-panel="nozzles">Nozzle Setup</button>
+            <button class="openpnp-tab" data-openpnp-panel="ai-review">AI Part Review</button>
           </div>
           <div class="openpnp-panel active" id="openpnp-library">
             <div class="panel openpnp-export">
@@ -226,6 +227,89 @@
               </div>
               <div class="nozzle-assignment-list" id="nozzleAssignmentList">
                 <p class="hint">Loading package assignments...</p>
+              </div>
+            </div>
+          </div>
+          <div class="openpnp-panel" id="openpnp-ai-review">
+            <div class="panel ai-review-intro">
+              <div>
+                <h3>AI part-height review</h3>
+                <p class="hint">Use this API to let an external AI inspect stored datasheets and submit documented component heights. Access is limited to parts without heights and height-review results.</p>
+              </div>
+              <div class="api-key-actions">
+                <span class="pill" id="heightApiKeyStatus">Checking API key</span>
+                <label class="hidden" id="currentHeightApiKeyField">
+                  <span>Current API key</span>
+                  <input id="currentHeightApiKey" type="password" autocomplete="off" placeholder="Required to replace the key">
+                </label>
+                <button id="generateHeightApiKeyBtn">Generate new API key</button>
+              </div>
+            </div>
+            <div class="panel hidden" id="heightApiKeyResult">
+              <h3>New API key</h3>
+              <p class="hint">This key is shown once. Store it securely; generating another key immediately invalidates this one.</p>
+              <div class="api-key-display">
+                <code id="heightApiKeyValue"></code>
+                <button id="copyHeightApiKeyBtn">Copy key</button>
+              </div>
+            </div>
+            <div class="ai-review-grid">
+              <div class="panel">
+                <h3>Instructions for an AI</h3>
+                <pre id="aiHeightReviewPrompt"><code>You are reviewing component heights for ReelKeeper.
+
+Base URL: <span data-height-api-origin></span>
+Authentication: Authorization: Bearer YOUR_API_KEY
+
+1. GET /api/height-review/pending
+2. For each item, GET its datasheetUrl using the same Authorization header.
+3. Read the package mechanical drawing and determine the maximum assembled component height in millimeters.
+4. Confirm the drawing applies to the exact manufacturer part number and package variant.
+5. POST /api/height-review/{partId}/result with status "approved", heightMm, datasheetPage, confidence, and evidence.
+6. Use status "needs-review" with a reason whenever the package variant or dimension is ambiguous. Never guess.
+7. Continue until the pending endpoint returns total: 0. Items submitted as "needs-review" leave the default AI queue but remain in ReelKeeper's manual queue.
+8. Do not modify inventory quantities or any other component data.</code></pre>
+                <button id="copyAiHeightPromptBtn">Copy instructions</button>
+              </div>
+              <div class="panel">
+                <h3>API contract</h3>
+                <pre><code>GET /api/height-review/pending?limit=100
+Authorization: Bearer YOUR_API_KEY
+
+Add includeNeedsReview=true only when intentionally rechecking previously ambiguous parts.
+
+GET /api/height-review/{partId}/datasheet
+Authorization: Bearer YOUR_API_KEY
+
+POST /api/height-review/{partId}/result
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "status": "approved",
+  "heightMm": 1.1,
+  "datasheetPage": 7,
+  "confidence": "high",
+  "evidence": "Dimension A is specified as 0.90-1.10 mm."
+}</code></pre>
+              </div>
+              <div class="panel">
+                <h3>Uncertain result</h3>
+                <pre><code>{
+  "status": "needs-review",
+  "reason": "The datasheet contains multiple package variants and the exact variant cannot be confirmed."
+}</code></pre>
+                <p class="hint">Only <code>high</code> and <code>medium</code> confidence results can be approved. Anything less certain must be returned for manual review.</p>
+              </div>
+              <div class="panel">
+                <h3>Connection</h3>
+                <p class="hint">The AI must be able to reach this ReelKeeper address. Use HTTPS through a private VPN or reverse proxy when connecting from outside your local network.</p>
+                <dl class="api-connection-details">
+                  <dt>Base URL</dt>
+                  <dd><code data-height-api-origin></code></dd>
+                  <dt>Authentication</dt>
+                  <dd><code>Authorization: Bearer YOUR_API_KEY</code></dd>
+                </dl>
               </div>
             </div>
           </div>
