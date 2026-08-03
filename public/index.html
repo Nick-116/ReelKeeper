@@ -167,6 +167,7 @@
             <button class="openpnp-tab" data-openpnp-panel="board-assignment">Board Assignment</button>
             <button class="openpnp-tab" data-openpnp-panel="packages">Packages &amp; Part Heights</button>
             <button class="openpnp-tab" data-openpnp-panel="nozzles">Nozzle Setup</button>
+            <button class="openpnp-tab" data-openpnp-panel="scripts">Scripts</button>
             <button class="openpnp-tab" data-openpnp-panel="ai-review">AI Part Review</button>
           </div>
           <div class="openpnp-panel active" id="openpnp-library">
@@ -242,6 +243,22 @@
               <div class="nozzle-assignment-list" id="nozzleAssignmentList">
                 <p class="hint">Loading package assignments...</p>
               </div>
+            </div>
+          </div>
+          <div class="openpnp-panel" id="openpnp-scripts">
+            <div class="panel openpnp-export">
+              <div>
+                <h3>OpenPnP utility scripts</h3>
+                <p class="hint">Download focused tools for common OpenPnP setup tasks. Put each file in OpenPnP's scripts directory and run it from the Scripts menu.</p>
+              </div>
+              <div class="script-download-row">
+                <div>
+                  <strong>Set selected feeder pick height</strong>
+                  <p class="hint">Select one or more feeders in OpenPnP, run the script, and enter their shared pick Z height in millimeters. Unselected feeders are not changed.</p>
+                </div>
+                <a class="button-link primary" href="/api/export/openpnp/scripts/set-selected-feeder-pick-z.js" download><span class="download-icon" aria-hidden="true"></span>Download script</a>
+              </div>
+              <p class="openpnp-export-note">In OpenPnP, use Ctrl-click on Windows or Linux, Command-click on macOS, or Shift-click to select multiple feeder rows before running <strong>ReelKeeper_Set_Selected_Feeder_Pick_Height.js</strong>.</p>
             </div>
           </div>
           <div class="openpnp-panel" id="openpnp-ai-review">

@@ -858,6 +858,19 @@ img.component-thumb:hover {
   gap: 0.85rem;
 }
 
+.script-download-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.script-download-row .hint { margin: 0.35rem 0 0; }
+.script-download-row .button-link { flex: 0 0 auto; }
+
 .openpnp-export .hint,
 .openpnp-export-note {
   margin: 0;
@@ -1823,4 +1836,9 @@ dialog h3 {
   }
 
   .switch-control { align-self: flex-start; }
+
+  .script-download-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

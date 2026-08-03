@@ -1589,6 +1589,71 @@ JOptionPane.showMessageDialog(gui, summary, "ReelKeeper Import", JOptionPane.INF
 `;
 }
 
+function buildOpenPnpSelectedFeederPickZScript() {
+  return `// ReelKeeper OpenPnP selected-feeder pick-height tool
+// Select one or more rows on OpenPnP's Feeders tab before running this script.
+var JOptionPane = Java.type("javax.swing.JOptionPane");
+var Length = Java.type("org.openpnp.model.Length");
+var LengthUnit = Java.type("org.openpnp.model.LengthUnit");
+
+var feederPanel = gui.getFeedersTab();
+var selectedFeeders = feederPanel.getSelections();
+
+if (selectedFeeders == null || selectedFeeders.size() === 0) {
+  JOptionPane.showMessageDialog(gui,
+    "Select one or more feeders on the Feeders tab, then run this script again.",
+    "ReelKeeper Feeder Pick Height",
+    JOptionPane.WARNING_MESSAGE);
+} else {
+  var initialHeight = 0;
+  try {
+    initialHeight = selectedFeeders.get(0).getPickLocation()
+      .convertToUnits(LengthUnit.Millimeters).getZ();
+  } catch (ignored) {}
+
+  var answer = JOptionPane.showInputDialog(gui,
+    "Set the pick Z height for " + selectedFeeders.size() + " selected feeder(s).\\n\\nPick Z height (mm):",
+    String(initialHeight));
+
+  if (answer != null) {
+    var zMm = Number(String(answer).trim().replace(",", "."));
+    if (!isFinite(zMm)) {
+      JOptionPane.showMessageDialog(gui,
+        "Enter a valid numeric Z height in millimeters.",
+        "ReelKeeper Feeder Pick Height",
+        JOptionPane.ERROR_MESSAGE);
+    } else {
+      var updated = 0;
+      var failed = [];
+      for (var index = 0; index < selectedFeeders.size(); index++) {
+        var feeder = selectedFeeders.get(index);
+        try {
+          var location = feeder.getLocation();
+          var zInFeederUnits = new Length(zMm, LengthUnit.Millimeters)
+            .convertToUnits(location.getUnits()).getValue();
+          feeder.setLocation(location.derive(null, null, zInFeederUnits, null));
+          updated++;
+        } catch (error) {
+          failed.push(String(feeder.getName() || feeder.getId()));
+        }
+      }
+
+      config.save();
+      feederPanel.updateView();
+      var summary = "Updated " + updated + " selected feeder(s) to Z " + zMm + " mm.";
+      if (failed.length > 0) {
+        summary += "\\n\\nCould not update: " + failed.join(", ") +
+          "\\nThese feeder types do not expose a configurable base pick location.";
+      }
+      JOptionPane.showMessageDialog(gui, summary,
+        "ReelKeeper Feeder Pick Height",
+        failed.length > 0 ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+    }
+  }
+}
+`;
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, name: "ReelKeeper", time: now() });
 });
@@ -2157,6 +2222,12 @@ app.get("/api/export/openpnp/import-script.js", (_req, res) => {
   res.send(buildOpenPnpImportScript(openPnpEligibleParts(store), store.openPnpNozzleAssignments));
 });
 
+app.get("/api/export/openpnp/scripts/set-selected-feeder-pick-z.js", (_req, res) => {
+  res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="ReelKeeper_Set_Selected_Feeder_Pick_Height.js"');
+  res.send(buildOpenPnpSelectedFeederPickZScript());
+});
+
 app.post("/api/export/openpnp/bom-assignment-script", async (req, res) => {
   try {
     const fileName = String(req.body?.fileName || "");
@@ -2561,6 +2632,7 @@ app.get("/api/docs", (_req, res) => {
       { method: "GET", path: "/height-review/:partId/datasheet", authentication: "Bearer height-review API key", description: "Download or retrieve the stored PDF datasheet for one pending component." },
       { method: "POST", path: "/height-review/:partId/result", authentication: "Bearer height-review API key", description: "Submit an approved height with evidence, or mark an ambiguous component as needs-review." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
+      { method: "GET", path: "/export/openpnp/scripts/set-selected-feeder-pick-z.js", description: "Download an OpenPnP utility that sets the pick Z height only for feeders selected on the Feeders tab." },
       { method: "POST", path: "/export/openpnp/bom-assignment-script", description: "Upload a base64 CSV, TSV, or XLSX BOM and generate a script that assigns existing OpenPnP parts to board placements by designator and LCSC number." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],
