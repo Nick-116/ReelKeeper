@@ -695,6 +695,7 @@ async function createOpenPnpBomAssignment(event) {
       ${result.missingParts.length ? `<p class="assignment-warning"><strong>Missing library parts:</strong> ${escapeHtml(result.missingParts.map((item) => `${item.lcsc} (${item.designators})`).join(", "))}</p>` : ""}
       ${result.rowsWithoutLcsc.length ? `<p class="assignment-warning"><strong>No LCSC number:</strong> ${escapeHtml(result.rowsWithoutLcsc.map((item) => item.designators).join(", "))}</p>` : ""}
       ${result.conflicts.length ? `<p class="assignment-warning"><strong>Conflicting designators:</strong> ${escapeHtml(result.conflicts.map((item) => item.designator).join(", "))}</p>` : ""}
+      ${result.matchedByMpn?.length ? `<p class="assignment-note"><strong>Matched by exact MPN:</strong> ${escapeHtml(result.matchedByMpn.map((item) => `${item.designators} → ${item.mpn}${item.lcsc ? ` (${item.lcsc})` : ""}`).join(", "))}</p>` : ""}
       <button class="primary" id="downloadOpenPnpBomScriptBtn"><span class="download-icon" aria-hidden="true"></span>Download assignment script</button>
       <p class="openpnp-export-note">Select the board on OpenPnP's Boards tab, then run <strong>ReelKeeper_Assign_BOM_Parts.js</strong> from the Scripts menu.</p>
     `;

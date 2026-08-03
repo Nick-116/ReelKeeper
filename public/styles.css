@@ -889,7 +889,9 @@ img.component-thumb:hover {
 .board-assignment-summary strong { font-size: 1.3rem; }
 .board-assignment-summary span,
 .assignment-warning { color: var(--muted); font-size: 0.88rem; }
-.assignment-warning { margin: 0; }
+.assignment-warning,
+.assignment-note { margin: 0; }
+.assignment-note { color: var(--accent-strong); font-size: 0.88rem; }
 
 @media (max-width: 760px) {
   .board-assignment-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }

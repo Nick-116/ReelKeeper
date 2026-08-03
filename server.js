@@ -1094,6 +1094,7 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       quantity: Number(part.quantity || 0),
       lcsc: part.lcsc || "",
       mouser: part.mouser || "",
+      mpn: part.mpn || "",
       footprint: part.openPnpFootprint || openPnpFootprint(openPnpPackageId(part)),
       footprintSource: part.openPnpFootprint ? (part.openPnpFootprintSource || "EasyEDA") : (openPnpFootprint(openPnpPackageId(part)) ? "ReelKeeper standard package" : ""),
       heightMm: part.heightDefaultSuppressed ? 0 : (Number(part.heightMm) || defaultPartHeightMm(part)),
@@ -1113,6 +1114,7 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       ...preferred,
       lcsc: existing.lcsc || candidate.lcsc,
       mouser: existing.mouser || candidate.mouser,
+      mpn: existing.mpn || candidate.mpn,
       footprint: existing.footprint || candidate.footprint,
       footprintSource: existing.footprintSource || candidate.footprintSource,
       heightMm: preferredHeight.heightMm || 0,
@@ -1129,6 +1131,7 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       name: [part.name, identifiers.length && !nameIncludesSupplier ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
       lcsc: part.lcsc || "",
       mouser: part.mouser || "",
+      mpn: part.mpn || "",
       packageId: part.packageId,
       footprint: part.footprint,
       footprintSource: part.footprintSource,
@@ -1142,22 +1145,35 @@ function openPnpParts(parts, nozzleAssignments = {}) {
 }
 
 function openPnpBomAssignmentPlan(parts, rows) {
-  const exportedByLcsc = new Map(openPnpParts(parts).filter((part) => part.lcsc).map((part) => [part.lcsc.toUpperCase(), part]));
+  const exportedParts = openPnpParts(parts);
+  const exportedByLcsc = new Map(exportedParts.filter((part) => part.lcsc).map((part) => [part.lcsc.toUpperCase(), part]));
+  const exportedByMpn = new Map();
+  exportedParts.filter((part) => part.mpn).forEach((part) => {
+    const key = part.mpn.trim().toUpperCase();
+    if (!exportedByMpn.has(key)) exportedByMpn.set(key, []);
+    exportedByMpn.get(key).push(part);
+  });
   const assignments = [];
   const missingParts = new Map();
   const rowsWithoutLcsc = [];
   const conflicts = [];
+  const matchedByMpn = [];
   const designatorParts = new Map();
 
   rows.forEach((row, rowIndex) => {
     const lcsc = String(row.lcsc || "").trim().toUpperCase();
+    const mpn = String(row.mpn || "").trim().toUpperCase();
     const designators = String(row.designator || "").split(/[,;\s]+/).map((value) => value.trim()).filter(Boolean);
     if (!designators.length) return;
-    if (!/^C\d+$/.test(lcsc)) {
+    let part = /^C\d+$/.test(lcsc) ? exportedByLcsc.get(lcsc) : null;
+    if (!part && mpn && exportedByMpn.get(mpn)?.length === 1) {
+      part = exportedByMpn.get(mpn)[0];
+      matchedByMpn.push({ mpn, lcsc: part.lcsc || "", designators: designators.join(", ") });
+    }
+    if (!part && !/^C\d+$/.test(lcsc)) {
       rowsWithoutLcsc.push({ row: rowIndex + 2, designators: designators.join(", "), value: row.value || row.comment || "" });
       return;
     }
-    const part = exportedByLcsc.get(lcsc);
     if (!part) {
       missingParts.set(lcsc, { lcsc, designators: designators.join(", "), value: row.value || row.comment || "" });
       return;
@@ -1170,11 +1186,11 @@ function openPnpBomAssignmentPlan(parts, rows) {
         return;
       }
       designatorParts.set(key, part.id);
-      assignments.push({ designator, lcsc, partId: part.id });
+      assignments.push({ designator, lcsc: part.lcsc || lcsc, mpn: part.mpn || mpn, partId: part.id });
     });
   });
 
-  return { assignments, missingParts: [...missingParts.values()], rowsWithoutLcsc, conflicts };
+  return { assignments, missingParts: [...missingParts.values()], rowsWithoutLcsc, conflicts, matchedByMpn };
 }
 
 function buildOpenPnpBomAssignmentScript(plan) {
@@ -2093,6 +2109,7 @@ app.post("/api/export/openpnp/bom-assignment-script", async (req, res) => {
       missingParts: plan.missingParts,
       rowsWithoutLcsc: plan.rowsWithoutLcsc,
       conflicts: plan.conflicts,
+      matchedByMpn: plan.matchedByMpn,
       script: buildOpenPnpBomAssignmentScript(plan)
     });
   } catch (error) {

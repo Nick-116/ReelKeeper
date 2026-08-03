@@ -19,7 +19,7 @@ ReelKeeper is a self hosted inventory management software for PCB components. I 
 - Exclude loose-only stock from OpenPnP exports and board assignments with a persistent General setting; components that also have machine-ready stock remain available.
 - Store component heights for OpenPnP using datasheet dimensions, package defaults, or manual review. Datasheets are downloaded with component data and available in the built-in review viewer.
 - Use the authenticated AI Part Review API to review only components missing verified heights and submit evidence-backed results without embedding AI in ReelKeeper.
-- Upload a board BOM and export an OpenPnP assignment script that connects every designator to an existing library part by LCSC number. Missing parts, missing LCSC numbers, and conflicting designators are reported before download.
+- Upload a board BOM and export an OpenPnP assignment script that connects every designator to an existing library part by LCSC number, with an exact manufacturer-part-number fallback. Missing parts, missing identifiers, and conflicting designators are reported before download.
 - Undo order imports, review inventory activity in the audit log, and reset the installation from Settings.
 - Full API: I added this so I could have my pick and place automatically adjust my database every time it places a component. If you are interested in the scripts for that send me a message! It is all documented in the settings>API page.
 
