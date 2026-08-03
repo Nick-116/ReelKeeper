@@ -802,6 +802,42 @@ img.component-thumb:hover {
   gap: 0.65rem;
 }
 
+.board-assignment-panel,
+.board-assignment-result {
+  display: grid;
+  gap: 1rem;
+}
+
+.board-assignment-panel > div:first-child .hint { margin-bottom: 0; }
+.board-assignment-picker { max-width: 520px; }
+
+.board-assignment-result {
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.board-assignment-result > button { justify-self: start; }
+
+.board-assignment-result.has-issues {
+  border-top-color: #d7a6a6;
+}
+
+.board-assignment-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 1rem;
+}
+
+.board-assignment-summary div { display: grid; gap: 0.2rem; }
+.board-assignment-summary strong { font-size: 1.3rem; }
+.board-assignment-summary span,
+.assignment-warning { color: var(--muted); font-size: 0.88rem; }
+.assignment-warning { margin: 0; }
+
+@media (max-width: 760px) {
+  .board-assignment-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .ai-review-intro {
   display: flex;
   align-items: center;

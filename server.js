@@ -493,6 +493,55 @@ function normalizeImportedRow(row) {
   return output;
 }
 
+function decodeDelimitedFile(buffer) {
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString("utf16le");
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let index = 2; index + 1 < buffer.length; index += 2) {
+      swapped[index - 2] = buffer[index + 1];
+      swapped[index - 1] = buffer[index];
+    }
+    return swapped.toString("utf16le");
+  }
+  return buffer.toString("utf8").replace(/^\ufeff/, "");
+}
+
+function parseDelimitedLine(line, delimiter) {
+  const values = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index++) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === delimiter && !quoted) {
+      values.push(value);
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+  values.push(value);
+  return values;
+}
+
+function parseDelimitedBom(buffer) {
+  const contents = decodeDelimitedFile(buffer).replace(/\r\n?/g, "\n");
+  const lines = contents.split("\n").filter((line) => line.trim());
+  if (!lines.length) return [];
+  const delimiter = (lines[0].match(/\t/g) || []).length > (lines[0].match(/,/g) || []).length ? "\t" : ",";
+  const headers = parseDelimitedLine(lines[0], delimiter).map(normalizeImportKey);
+  return lines.slice(1).map((line) => {
+    const values = parseDelimitedLine(line, delimiter);
+    return normalizeImportedRow(Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])));
+  }).filter((row) => row.designator || row.lcsc);
+}
+
 function parseMoney(value) {
   const parsed = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -1069,6 +1118,8 @@ function openPnpParts(parts, nozzleAssignments = {}) {
     return {
       id: part.id,
       name: [part.name, identifiers.length && !nameIncludesSupplier ? `(${identifiers.join(", ")})` : ""].filter(Boolean).join(" "),
+      lcsc: part.lcsc || "",
+      mouser: part.mouser || "",
       packageId: part.packageId,
       footprint: part.footprint,
       footprintSource: part.footprintSource,
@@ -1079,6 +1130,101 @@ function openPnpParts(parts, nozzleAssignments = {}) {
       nozzleSize: part.nozzleSize || ""
     };
   }).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+}
+
+function openPnpBomAssignmentPlan(parts, rows) {
+  const exportedByLcsc = new Map(openPnpParts(parts).filter((part) => part.lcsc).map((part) => [part.lcsc.toUpperCase(), part]));
+  const assignments = [];
+  const missingParts = new Map();
+  const rowsWithoutLcsc = [];
+  const conflicts = [];
+  const designatorParts = new Map();
+
+  rows.forEach((row, rowIndex) => {
+    const lcsc = String(row.lcsc || "").trim().toUpperCase();
+    const designators = String(row.designator || "").split(/[,;\s]+/).map((value) => value.trim()).filter(Boolean);
+    if (!designators.length) return;
+    if (!/^C\d+$/.test(lcsc)) {
+      rowsWithoutLcsc.push({ row: rowIndex + 2, designators: designators.join(", "), value: row.value || row.comment || "" });
+      return;
+    }
+    const part = exportedByLcsc.get(lcsc);
+    if (!part) {
+      missingParts.set(lcsc, { lcsc, designators: designators.join(", "), value: row.value || row.comment || "" });
+      return;
+    }
+    designators.forEach((designator) => {
+      const key = designator.toUpperCase();
+      const previous = designatorParts.get(key);
+      if (previous && previous !== part.id) {
+        conflicts.push({ designator, firstPartId: previous, secondPartId: part.id });
+        return;
+      }
+      designatorParts.set(key, part.id);
+      assignments.push({ designator, lcsc, partId: part.id });
+    });
+  });
+
+  return { assignments, missingParts: [...missingParts.values()], rowsWithoutLcsc, conflicts };
+}
+
+function buildOpenPnpBomAssignmentScript(plan) {
+  const data = JSON.stringify(plan.assignments, null, 2);
+  return `// ReelKeeper OpenPnP BOM part assignment
+// Generated ${now()}. Assigns existing OpenPnP parts to placements on the selected board.
+var JOptionPane = Java.type("javax.swing.JOptionPane");
+var assignments = ${data};
+var board = gui.getBoardsTab().getSelection();
+
+if (board == null) {
+  JOptionPane.showMessageDialog(gui, "Select exactly one board on the Boards tab, then run this script again.", "ReelKeeper BOM Assignment", JOptionPane.ERROR_MESSAGE);
+} else {
+  var placementById = {};
+  var placements = board.getPlacements();
+  for (var placementIndex = 0; placementIndex < placements.size(); placementIndex++) {
+    var placement = placements.get(placementIndex);
+    placementById[String(placement.getId()).trim().toUpperCase()] = placement;
+  }
+
+  var assigned = 0;
+  var unchanged = 0;
+  var missingPlacements = [];
+  var missingParts = [];
+  assignments.forEach(function(item) {
+    var placement = placementById[String(item.designator).toUpperCase()];
+    if (placement == null) {
+      missingPlacements.push(item.designator);
+      return;
+    }
+    var part = config.getPart(item.partId);
+    if (part == null) {
+      missingParts.push(item.lcsc + " (" + item.partId + ")");
+      return;
+    }
+    if (placement.getPart() === part) {
+      unchanged++;
+      return;
+    }
+    placement.setPart(part);
+    assigned++;
+  });
+
+  if (assigned > 0) {
+    board.setDirty(true);
+    config.saveBoard(board);
+    gui.getBoardsTab().getBoardPlacementsPanel().refresh();
+  }
+  var uniqueMissingParts = missingParts.filter(function(value, index, values) { return values.indexOf(value) === index; });
+  var summary = "ReelKeeper BOM assignment complete.\\nAssigned: " + assigned +
+    "\\nAlready assigned: " + unchanged +
+    "\\nDesignators not found on board: " + missingPlacements.length +
+    "\\nParts not found in OpenPnP: " + uniqueMissingParts.length;
+  if (missingPlacements.length) summary += "\\n\\nMissing designators: " + missingPlacements.join(", ");
+  if (uniqueMissingParts.length) summary += "\\n\\nMissing parts (run the ReelKeeper library import first): " + uniqueMissingParts.join(", ");
+  print(summary);
+  JOptionPane.showMessageDialog(gui, summary, "ReelKeeper BOM Assignment", missingPlacements.length || uniqueMissingParts.length ? JOptionPane.WARNING_MESSAGE : JOptionPane.INFORMATION_MESSAGE);
+}
+`;
 }
 
 function escapeXml(value) {
@@ -1923,6 +2069,27 @@ app.get("/api/export/openpnp/import-script.js", (_req, res) => {
   res.send(buildOpenPnpImportScript(store.parts, store.openPnpNozzleAssignments));
 });
 
+app.post("/api/export/openpnp/bom-assignment-script", async (req, res) => {
+  try {
+    const fileName = String(req.body?.fileName || "");
+    const buffer = Buffer.from(String(req.body?.fileBase64 || ""), "base64");
+    if (!buffer.length) return res.status(400).json({ error: "A BOM file is required" });
+    const rows = /\.xlsx$/i.test(fileName) ? await parseXlsxBom(buffer) : parseDelimitedBom(buffer);
+    const plan = openPnpBomAssignmentPlan(readStore().parts, rows);
+    res.json({
+      fileName,
+      rowCount: rows.length,
+      assignmentCount: plan.assignments.length,
+      missingParts: plan.missingParts,
+      rowsWithoutLcsc: plan.rowsWithoutLcsc,
+      conflicts: plan.conflicts,
+      script: buildOpenPnpBomAssignmentScript(plan)
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not parse the BOM" });
+  }
+});
+
 app.get("/api/parts", (req, res) => {
   const store = readStore();
   const q = String(req.query.q || "").toLowerCase();
@@ -2281,6 +2448,7 @@ app.get("/api/docs", (_req, res) => {
       { method: "GET", path: "/height-review/:partId/datasheet", authentication: "Bearer height-review API key", description: "Download or retrieve the stored PDF datasheet for one pending component." },
       { method: "POST", path: "/height-review/:partId/result", authentication: "Bearer height-review API key", description: "Submit an approved height with evidence, or mark an ambiguous component as needs-review." },
       { method: "GET", path: "/export/openpnp/import-script.js", description: "Download an additive OpenPnP script that creates missing packages and parts without changing existing IDs." },
+      { method: "POST", path: "/export/openpnp/bom-assignment-script", description: "Upload a base64 CSV, TSV, or XLSX BOM and generate a script that assigns existing OpenPnP parts to board placements by designator and LCSC number." },
       { method: "POST", path: "/use", description: "Mark a component as used. Body: { lcsc or mpn or id, quantity }. Quantity defaults to 1." }
     ],
     useExample: {

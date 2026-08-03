@@ -14,6 +14,7 @@ ReelKeeper is a self hosted inventory management software for PCB components. I 
 - BOM checking: References your library to a bill of materials for a current project. It will do its best to match components that fit the bill, not specific to brands. For example it will choose any capacitor that is over 12v, is 0805, etc..
 - Save manual BOM matches, export the remaining parts to order, and estimate the component cost per board using updated LCSC or imported Mouser pricing.
 - Export OpenPnP `parts.xml` and `packages.xml` files or an additive import script. ReelKeeper can retrieve exact pad geometry from EasyEDA using LCSC part numbers, show a footprint preview for approval, and report components that still need review.
+- Upload a board BOM and export an OpenPnP script that assigns existing library parts to board designators by LCSC part number.
 - Review missing OpenPnP component heights manually from stored datasheets, or use the authenticated AI Part Review API to submit evidence-backed heights without embedding AI in ReelKeeper.
 - Undo order imports, review inventory activity in the audit log, and reset the installation from Settings.
 - Full API: I added this so I could have my pick and place automatically adjust my database every time it places a component. If you are interested in the scripts for that send me a message! It is all documented in the settings>API page.

@@ -664,6 +664,49 @@ function fileToBase64(file) {
   });
 }
 
+function downloadTextFile(contents, fileName, type = "text/javascript;charset=utf-8") {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([contents], { type }));
+  link.download = fileName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+async function createOpenPnpBomAssignment(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const resultPanel = $("#openPnpBomResult");
+  resultPanel.classList.remove("hidden", "has-issues");
+  resultPanel.innerHTML = `<span class="loading-spinner" aria-hidden="true"></span><strong>Checking BOM against the OpenPnP library...</strong>`;
+  try {
+    const result = await api("/api/export/openpnp/bom-assignment-script", {
+      method: "POST",
+      body: JSON.stringify({ fileName: file.name, fileBase64: await fileToBase64(file) })
+    });
+    const issueCount = result.missingParts.length + result.rowsWithoutLcsc.length + result.conflicts.length;
+    resultPanel.classList.toggle("has-issues", issueCount > 0);
+    resultPanel.innerHTML = `
+      <div class="board-assignment-summary">
+        <div><strong>${result.assignmentCount.toLocaleString()}</strong><span>designators ready</span></div>
+        <div><strong>${result.missingParts.length.toLocaleString()}</strong><span>parts missing from library</span></div>
+        <div><strong>${result.rowsWithoutLcsc.length.toLocaleString()}</strong><span>rows without LCSC numbers</span></div>
+        <div><strong>${result.conflicts.length.toLocaleString()}</strong><span>designator conflicts</span></div>
+      </div>
+      ${result.missingParts.length ? `<p class="assignment-warning"><strong>Missing library parts:</strong> ${escapeHtml(result.missingParts.map((item) => `${item.lcsc} (${item.designators})`).join(", "))}</p>` : ""}
+      ${result.rowsWithoutLcsc.length ? `<p class="assignment-warning"><strong>No LCSC number:</strong> ${escapeHtml(result.rowsWithoutLcsc.map((item) => item.designators).join(", "))}</p>` : ""}
+      ${result.conflicts.length ? `<p class="assignment-warning"><strong>Conflicting designators:</strong> ${escapeHtml(result.conflicts.map((item) => item.designator).join(", "))}</p>` : ""}
+      <button class="primary" id="downloadOpenPnpBomScriptBtn"><span class="download-icon" aria-hidden="true"></span>Download assignment script</button>
+      <p class="openpnp-export-note">Select the board on OpenPnP's Boards tab, then run <strong>ReelKeeper_Assign_BOM_Parts.js</strong> from the Scripts menu.</p>
+    `;
+    $("#downloadOpenPnpBomScriptBtn").addEventListener("click", () => downloadTextFile(result.script, "ReelKeeper_Assign_BOM_Parts.js"));
+  } catch (error) {
+    resultPanel.classList.add("has-issues");
+    resultPanel.innerHTML = `<strong>BOM could not be processed.</strong><span>${escapeHtml(error.message)}</span>`;
+  } finally {
+    event.target.value = "";
+  }
+}
+
 function previewRows(rows, fileName, source) {
   const validRows = rows.filter((row) => Number(row.quantity || 0) > 0)
     .map((row) => {
@@ -1450,6 +1493,7 @@ function bindEvents() {
   $("#manualAddComponentBtn").addEventListener("click", () => openPartDialog());
   $("#orderFile").addEventListener("change", importOrder);
   $("#mouserOrderFile").addEventListener("change", importMouserOrder);
+  $("#openPnpBomFile")?.addEventListener("change", createOpenPnpBomAssignment);
   $("#templateFile").addEventListener("change", importTemplate);
   $("#exportTemplateBtn").addEventListener("click", exportTemplate);
   $("#importPreviewForm").addEventListener("submit", confirmImport);
