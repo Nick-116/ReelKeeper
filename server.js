@@ -24,7 +24,7 @@ function seedData() {
     importBatches: [],
     bomMatchRules: [],
     openPnpNozzleAssignments: {},
-    settings: { openPnpExcludeLooseStock: true },
+    settings: { openPnpIncludeLooseStock: false },
     heightReviewApiKeyHash: ""
   };
 }
@@ -45,7 +45,12 @@ function readStore() {
   store.bomMatchRules ||= [];
   store.openPnpNozzleAssignments ||= {};
   store.settings ||= {};
-  if (typeof store.settings.openPnpExcludeLooseStock !== "boolean") store.settings.openPnpExcludeLooseStock = true;
+  if (typeof store.settings.openPnpIncludeLooseStock !== "boolean") {
+    store.settings.openPnpIncludeLooseStock = typeof store.settings.openPnpExcludeLooseStock === "boolean"
+      ? !store.settings.openPnpExcludeLooseStock
+      : false;
+  }
+  delete store.settings.openPnpExcludeLooseStock;
   store.heightReviewApiKeyHash ||= "";
   store.parts.forEach((part) => {
     if (Number(part.heightMm) > 0 || part.heightDefaultSuppressed) return;
@@ -56,9 +61,9 @@ function readStore() {
 }
 
 function openPnpEligibleParts(store) {
-  return store.settings.openPnpExcludeLooseStock
-    ? store.parts.filter((part) => normalizeStorageType(part.storageType) !== "loose")
-    : store.parts;
+  return store.settings.openPnpIncludeLooseStock
+    ? store.parts
+    : store.parts.filter((part) => normalizeStorageType(part.storageType) !== "loose");
 }
 
 function writeStore(store) {
@@ -1394,7 +1399,7 @@ function knownOpenPnpPackages(parts) {
 
 function buildOpenPnpPackagesXml(parts) {
   const rows = openPnpPackages(parts).map((pkg) => {
-    const description = pkg.footprint ? `${pkg.footprintSource || "ReelKeeper"} footprint` : "Footprint needs review";
+    const description = "ReelKeeper Import";
     if (!pkg.footprint) {
       return `  <package id="${escapeXml(pkg.id)}" description="${description}"><footprint units="Millimeters"/></package>`;
     }
@@ -1489,6 +1494,7 @@ function selectNozzleTip(size) {
 }
 
 function addFootprint(pkg, definition, source) {
+  pkg.setDescription("ReelKeeper Import");
   if (definition == null || pkg.getFootprint().getPads().size() > 0) return;
   var footprint = pkg.getFootprint();
   footprint.setBodyWidth(definition.bodyWidth);
@@ -1504,7 +1510,6 @@ function addFootprint(pkg, definition, source) {
     pad.setRoundness(item.roundness || 0);
     footprint.addPad(pad);
   });
-  pkg.setDescription(source ? source + " footprint" : "ReelKeeper footprint");
   addedFootprints++;
 }
 
@@ -1512,7 +1517,7 @@ reelKeeperParts.forEach(function(item) {
   var pkg = config.getPackage(item.packageId);
   if (pkg == null) {
     pkg = new Package(item.packageId);
-    pkg.setDescription("Created by ReelKeeper import");
+    pkg.setDescription("ReelKeeper Import");
     config.addPackage(pkg);
     addedPackages++;
   }
@@ -2259,22 +2264,22 @@ app.post("/api/reset", (_req, res) => {
 
 app.get("/api/settings/general", (_req, res) => {
   const store = readStore();
-  res.json({ openPnpExcludeLooseStock: store.settings.openPnpExcludeLooseStock });
+  res.json({ openPnpIncludeLooseStock: store.settings.openPnpIncludeLooseStock });
 });
 
 app.patch("/api/settings/general", (req, res) => {
-  if (typeof req.body?.openPnpExcludeLooseStock !== "boolean") {
-    return res.status(400).json({ error: "openPnpExcludeLooseStock must be true or false" });
+  if (typeof req.body?.openPnpIncludeLooseStock !== "boolean") {
+    return res.status(400).json({ error: "openPnpIncludeLooseStock must be true or false" });
   }
   const store = readStore();
-  store.settings.openPnpExcludeLooseStock = req.body.openPnpExcludeLooseStock;
+  store.settings.openPnpIncludeLooseStock = req.body.openPnpIncludeLooseStock;
   recordMovement(store, {
     type: "settings-update",
     delta: 0,
-    source: req.body.openPnpExcludeLooseStock ? "Loose stock excluded from OpenPnP" : "Loose stock included in OpenPnP"
+    source: req.body.openPnpIncludeLooseStock ? "Loose stock included in OpenPnP" : "Loose stock excluded from OpenPnP"
   });
   writeStore(store);
-  res.json({ openPnpExcludeLooseStock: store.settings.openPnpExcludeLooseStock });
+  res.json({ openPnpIncludeLooseStock: store.settings.openPnpIncludeLooseStock });
 });
 
 app.post("/api/pricing/lcsc/update", async (_req, res) => {
@@ -2534,8 +2539,8 @@ app.get("/api/docs", (_req, res) => {
       { method: "POST", path: "/bom/matches", description: "Save a reusable BOM-to-inventory match. Body: { requested: { lcsc, mpn, package, value }, partId }." },
       { method: "POST", path: "/pricing/lcsc/update", description: "Refresh USD price breaks for all components with an LCSC part number." },
       { method: "POST", path: "/parts/update-all", description: "Refresh LCSC pricing and photos, cache missing datasheets, then fetch missing EasyEDA footprint previews for approval." },
-      { method: "GET", path: "/settings/general", description: "Read general settings, including whether loose stock is excluded from OpenPnP exports." },
-      { method: "PATCH", path: "/settings/general", description: "Update general settings. Body: { openPnpExcludeLooseStock: true }." },
+      { method: "GET", path: "/settings/general", description: "Read general settings, including whether loose stock is included in OpenPnP exports." },
+      { method: "PATCH", path: "/settings/general", description: "Update general settings. Body: { openPnpIncludeLooseStock: true }." },
       { method: "GET", path: "/export/openpnp/parts.xml", description: "Download all unique inventory components as an OpenPnP parts.xml file." },
       { method: "GET", path: "/export/openpnp/packages.xml", description: "Download OpenPnP packages.xml with generated footprints for standard two-terminal passive packages." },
       { method: "GET", path: "/export/openpnp/status", description: "Report which inventory components have generated OpenPnP footprints and which need review." },

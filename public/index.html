@@ -353,13 +353,13 @@ Content-Type: application/json
             </div>
             <div class="panel settings-option-row">
               <div>
-                <h3>OpenPnP loose stock</h3>
-                <p class="hint">Exclude loose-only components from OpenPnP library exports, package setup, and board assignments. Components with machine-ready stock remain available.</p>
+                <h3>Include loose parts in OpenPnP</h3>
+                <p class="hint">When off, loose-only components are left out of OpenPnP exports and board assignments. Components that also have machine-ready stock remain available.</p>
               </div>
               <label class="switch-control">
-                <input id="excludeLooseFromOpenPnp" type="checkbox">
+                <input id="includeLooseInOpenPnp" type="checkbox">
                 <span class="switch-track" aria-hidden="true"></span>
-                <span>Exclude loose stock</span>
+                <span id="openPnpLooseStockStatus" class="switch-status">Off: loose parts excluded</span>
               </label>
             </div>
             <div class="panel pricing-settings">

@@ -924,23 +924,34 @@ async function loadDocs() {
 async function loadGeneralSettings() {
   try {
     const settings = await api("/api/settings/general");
-    $("#excludeLooseFromOpenPnp").checked = settings.openPnpExcludeLooseStock;
+    const input = $("#includeLooseInOpenPnp");
+    input.checked = settings.openPnpIncludeLooseStock;
+    updateOpenPnpLooseStockStatus(input.checked);
   } catch (error) {
     window.alert(`Settings could not be loaded: ${error.message}`);
   }
 }
 
+function updateOpenPnpLooseStockStatus(included) {
+  const status = $("#openPnpLooseStockStatus");
+  status.textContent = included ? "On: loose parts included" : "Off: loose parts excluded";
+  status.classList.toggle("is-on", included);
+}
+
 async function saveOpenPnpLooseStockSetting(event) {
   const input = event.target;
+  updateOpenPnpLooseStockStatus(input.checked);
   input.disabled = true;
   try {
     const settings = await api("/api/settings/general", {
       method: "PATCH",
-      body: JSON.stringify({ openPnpExcludeLooseStock: input.checked })
+      body: JSON.stringify({ openPnpIncludeLooseStock: input.checked })
     });
-    input.checked = settings.openPnpExcludeLooseStock;
+    input.checked = settings.openPnpIncludeLooseStock;
+    updateOpenPnpLooseStockStatus(input.checked);
   } catch (error) {
     input.checked = !input.checked;
+    updateOpenPnpLooseStockStatus(input.checked);
     window.alert(`Setting could not be saved: ${error.message}`);
   } finally {
     input.disabled = false;
@@ -1549,7 +1560,7 @@ function bindEvents() {
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);
   $("#updateAllPartsBtn")?.addEventListener("click", updateAllParts);
-  $("#excludeLooseFromOpenPnp")?.addEventListener("change", saveOpenPnpLooseStockSetting);
+  $("#includeLooseInOpenPnp")?.addEventListener("change", saveOpenPnpLooseStockSetting);
   $("#closeFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#cancelFootprintReviewBtn")?.addEventListener("click", closeFootprintReview);
   $("#approveFootprintsBtn")?.addEventListener("click", approveEasyEdaFootprints);

@@ -843,6 +843,16 @@ img.component-thumb:hover {
 .switch-control input:focus-visible + .switch-track { outline: 3px solid rgba(13, 137, 112, 0.25); }
 .switch-control input:disabled + .switch-track { opacity: 0.55; }
 
+.switch-status {
+  min-width: 176px;
+  color: var(--muted);
+}
+
+.switch-status.is-on {
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
 .openpnp-export {
   display: grid;
   gap: 0.85rem;
