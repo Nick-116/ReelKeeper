@@ -1158,6 +1158,7 @@ function openPnpBomAssignmentPlan(parts, rows) {
   const rowsWithoutLcsc = [];
   const conflicts = [];
   const matchedByMpn = [];
+  const unresolved = [];
   const designatorParts = new Map();
 
   rows.forEach((row, rowIndex) => {
@@ -1172,10 +1173,12 @@ function openPnpBomAssignmentPlan(parts, rows) {
     }
     if (!part && !/^C\d+$/.test(lcsc)) {
       rowsWithoutLcsc.push({ row: rowIndex + 2, designators: designators.join(", "), value: row.value || row.comment || "" });
+      unresolved.push({ designators, lcsc: "", mpn, value: row.value || row.comment || "", package: row.package || row.footprint || "" });
       return;
     }
     if (!part) {
       missingParts.set(lcsc, { lcsc, designators: designators.join(", "), value: row.value || row.comment || "" });
+      unresolved.push({ designators, lcsc, mpn, value: row.value || row.comment || "", package: row.package || row.footprint || "" });
       return;
     }
     designators.forEach((designator) => {
@@ -1190,15 +1193,17 @@ function openPnpBomAssignmentPlan(parts, rows) {
     });
   });
 
-  return { assignments, missingParts: [...missingParts.values()], rowsWithoutLcsc, conflicts, matchedByMpn };
+  return { assignments, missingParts: [...missingParts.values()], rowsWithoutLcsc, conflicts, matchedByMpn, unresolved };
 }
 
 function buildOpenPnpBomAssignmentScript(plan) {
   const data = JSON.stringify(plan.assignments, null, 2);
+  const unresolvedData = JSON.stringify(plan.unresolved || [], null, 2);
   return `// ReelKeeper OpenPnP BOM part assignment
 // Generated ${now()}. Assigns existing OpenPnP parts to placements on the selected board.
 var JOptionPane = Java.type("javax.swing.JOptionPane");
 var assignments = ${data};
+var unresolvedBomLines = ${unresolvedData};
 var board = gui.getBoardsTab().getSelection();
 
 if (board == null) {
@@ -1212,7 +1217,9 @@ if (board == null) {
   }
 
   var assigned = 0;
+  var manuallyAssigned = 0;
   var unchanged = 0;
+  var skippedBomLines = 0;
   var missingPlacements = [];
   var missingParts = [];
   assignments.forEach(function(item) {
@@ -1234,14 +1241,65 @@ if (board == null) {
     assigned++;
   });
 
-  if (assigned > 0) {
+  var configuredParts = [];
+  var configuredPartLabels = [];
+  var openPnpParts = config.getParts();
+  for (var partIndex = 0; partIndex < openPnpParts.size(); partIndex++) {
+    var configuredPart = openPnpParts.get(partIndex);
+    var configuredPartName = String(configuredPart.getName() || "");
+    configuredParts.push(configuredPart);
+    configuredPartLabels.push(String(configuredPart.getId()) + (configuredPartName ? " - " + configuredPartName : ""));
+  }
+  var sortedIndexes = configuredPartLabels.map(function(_label, index) { return index; }).sort(function(left, right) {
+    return configuredPartLabels[left].localeCompare(configuredPartLabels[right]);
+  });
+  var sortedParts = sortedIndexes.map(function(index) { return configuredParts[index]; });
+  var partChoices = ["Skip this BOM line"].concat(sortedIndexes.map(function(index) { return configuredPartLabels[index]; }));
+
+  unresolvedBomLines.forEach(function(item) {
+    var existingDesignators = item.designators.filter(function(designator) {
+      return placementById[String(designator).toUpperCase()] != null;
+    });
+    if (!existingDesignators.length) {
+      missingPlacements = missingPlacements.concat(item.designators);
+      return;
+    }
+    var requested = [item.lcsc && "LCSC " + item.lcsc, item.mpn && "MPN " + item.mpn, item.value, item.package].filter(Boolean).join(" | ");
+    var message = "No exact OpenPnP library match was found for:\\n" + existingDesignators.join(", ") +
+      (requested ? "\\n" + requested : "") + "\\n\\nAssign an existing OpenPnP part or skip this BOM line:";
+    var choices = Java.to(partChoices, "java.lang.Object[]");
+    var selected = JOptionPane.showInputDialog(gui, message, "ReelKeeper BOM Part Assignment",
+      JOptionPane.QUESTION_MESSAGE, null, choices, choices[0]);
+    if (selected == null || String(selected) === partChoices[0]) {
+      skippedBomLines++;
+      return;
+    }
+    var selectedIndex = partChoices.indexOf(String(selected)) - 1;
+    if (selectedIndex < 0 || selectedIndex >= sortedParts.length) {
+      skippedBomLines++;
+      return;
+    }
+    var selectedPart = sortedParts[selectedIndex];
+    existingDesignators.forEach(function(designator) {
+      var placement = placementById[String(designator).toUpperCase()];
+      if (placement.getPart() === selectedPart) unchanged++;
+      else {
+        placement.setPart(selectedPart);
+        manuallyAssigned++;
+      }
+    });
+  });
+
+  if (assigned > 0 || manuallyAssigned > 0) {
     board.setDirty(true);
     config.saveBoard(board);
     gui.getBoardsTab().getBoardPlacementsPanel().refresh();
   }
   var uniqueMissingParts = missingParts.filter(function(value, index, values) { return values.indexOf(value) === index; });
   var summary = "ReelKeeper BOM assignment complete.\\nAssigned: " + assigned +
+    "\\nAssigned from prompts: " + manuallyAssigned +
     "\\nAlready assigned: " + unchanged +
+    "\\nSkipped BOM lines: " + skippedBomLines +
     "\\nDesignators not found on board: " + missingPlacements.length +
     "\\nParts not found in OpenPnP: " + uniqueMissingParts.length;
   if (missingPlacements.length) summary += "\\n\\nMissing designators: " + missingPlacements.join(", ");
@@ -2110,6 +2168,7 @@ app.post("/api/export/openpnp/bom-assignment-script", async (req, res) => {
       rowsWithoutLcsc: plan.rowsWithoutLcsc,
       conflicts: plan.conflicts,
       matchedByMpn: plan.matchedByMpn,
+      unresolvedCount: plan.unresolved.length,
       script: buildOpenPnpBomAssignmentScript(plan)
     });
   } catch (error) {
