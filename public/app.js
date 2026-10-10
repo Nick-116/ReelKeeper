@@ -1504,9 +1504,17 @@ function activateSettingsPanel(panelId) {
   $$(".settings-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.settingsPanel === panelId));
   $$(".settings-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `settings-${panelId}`));
   if (panelId === "api") loadDocs();
+  if (panelId === "mcp") loadMcpSetup();
   if (panelId === "general") loadGeneralSettings();
   if (panelId === "history") loadImportHistory();
   if (panelId === "audit") loadAuditLog();
+}
+
+function loadMcpSetup() {
+  const url = `${window.location.origin}/mcp`;
+  const config = JSON.stringify({ mcpServers: { reelkeeper: { type: "http", url } } }, null, 2);
+  $("#mcpServerUrl").textContent = url;
+  $("#mcpConfigExample").textContent = config;
 }
 
 function activateOpenPnpPanel(panelId) {
@@ -1558,6 +1566,8 @@ function bindEvents() {
     if (splitInput) setPreviewSplitQuantity(Number(splitInput.dataset.previewSplitQty), splitInput.dataset.splitKind, splitInput.value);
   });
   $("#refreshDocsBtn")?.addEventListener("click", loadDocs);
+  $("#copyMcpUrlBtn")?.addEventListener("click", () => copyText($("#mcpServerUrl").textContent, $("#copyMcpUrlBtn")));
+  $("#copyMcpConfigBtn")?.addEventListener("click", () => copyText($("#mcpConfigExample").textContent, $("#copyMcpConfigBtn")));
   $("#resetSoftwareBtn")?.addEventListener("click", resetSoftware);
   $("#updateAllPartsBtn")?.addEventListener("click", updateAllParts);
   $("#includeLooseInOpenPnp")?.addEventListener("change", saveOpenPnpLooseStockSetting);

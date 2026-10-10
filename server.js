@@ -4,6 +4,9 @@ const path = require("path");
 const { createHash, randomBytes, randomUUID, timingSafeEqual } = require("crypto");
 const yauzl = require("yauzl");
 const XLSX = require("@e965/xlsx");
+const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
+const { StreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
+const { z } = require("zod");
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -64,6 +67,102 @@ function openPnpEligibleParts(store) {
   return store.settings.openPnpIncludeLooseStock
     ? store.parts
     : store.parts.filter((part) => normalizeStorageType(part.storageType) !== "loose");
+}
+
+function mcpPartRecord(part) {
+  return { ...part };
+}
+
+function inventorySummary(store) {
+  const categoryMap = new Map();
+  let totalQuantity = 0;
+  let looseQuantity = 0;
+  let machineReadyQuantity = 0;
+  store.parts.forEach((part) => {
+    const quantity = Math.max(0, Number(part.quantity) || 0);
+    const category = part.category || "Uncategorized";
+    const current = categoryMap.get(category) || { componentRecords: 0, totalQuantity: 0 };
+    current.componentRecords++;
+    current.totalQuantity += quantity;
+    categoryMap.set(category, current);
+    totalQuantity += quantity;
+    if (normalizeStorageType(part.storageType) === "loose") looseQuantity += quantity;
+    else machineReadyQuantity += quantity;
+  });
+  return {
+    componentRecords: store.parts.length,
+    totalQuantity,
+    machineReadyQuantity,
+    looseQuantity,
+    categories: [...categoryMap.entries()]
+      .map(([category, values]) => ({ category, ...values }))
+      .sort((a, b) => a.category.localeCompare(b.category))
+  };
+}
+
+function mcpResult(value) {
+  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], structuredContent: value };
+}
+
+function createInventoryMcpServer() {
+  const server = new McpServer({ name: "reelkeeper-inventory", version: "1.0.0" });
+  const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+  server.registerTool("inventory_summary", {
+    title: "Inventory summary",
+    description: "Return ReelKeeper inventory totals and category counts. This tool cannot modify inventory.",
+    inputSchema: {},
+    annotations: readOnlyAnnotations
+  }, async () => mcpResult(inventorySummary(readStore())));
+
+  server.registerTool("search_components", {
+    title: "Search components",
+    description: "Search component records currently on hand and return their complete inventory metadata. Results can be filtered by category, manufacturer, package, storage type, and stock status.",
+    inputSchema: {
+      query: z.string().optional().describe("Text matched against name, description, value, manufacturer, MPN, LCSC number, Mouser number, package, and category"),
+      category: z.string().optional(),
+      manufacturer: z.string().optional(),
+      package: z.string().optional(),
+      storageType: z.enum(["machine-ready", "loose"]).optional(),
+      inStockOnly: z.boolean().optional().default(true),
+      limit: z.number().int().min(1).max(200).optional().default(100),
+      offset: z.number().int().min(0).optional().default(0)
+    },
+    annotations: readOnlyAnnotations
+  }, async ({ query = "", category, manufacturer, package: packageName, storageType, inStockOnly = true, limit = 100, offset = 0 }) => {
+    const needle = query.trim().toLowerCase();
+    const matches = readStore().parts.filter((part) => {
+      if (inStockOnly && Number(part.quantity) <= 0) return false;
+      if (category && String(part.category || "").toLowerCase() !== category.toLowerCase()) return false;
+      if (manufacturer && String(part.manufacturer || "").toLowerCase() !== manufacturer.toLowerCase()) return false;
+      if (packageName && String(part.package || "").toLowerCase() !== packageName.toLowerCase()) return false;
+      if (storageType && normalizeStorageType(part.storageType) !== storageType) return false;
+      if (!needle) return true;
+      return [part.name, part.description, part.value, part.manufacturer, part.mpn, part.lcsc, part.mouser, part.package, part.category]
+        .some((value) => String(value || "").toLowerCase().includes(needle));
+    });
+    return mcpResult({ total: matches.length, offset, limit, components: matches.slice(offset, offset + limit).map(mcpPartRecord) });
+  });
+
+  server.registerTool("get_component", {
+    title: "Get component",
+    description: "Return every ReelKeeper component record matching an internal id, LCSC number, manufacturer part number, or Mouser number.",
+    inputSchema: { identifier: z.string().trim().min(1).describe("Internal id, LCSC number, manufacturer part number, or Mouser number") },
+    annotations: readOnlyAnnotations
+  }, async ({ identifier }) => {
+    const needle = identifier.trim().toLowerCase();
+    const components = readStore().parts.filter((part) => [part.id, part.lcsc, part.mpn, part.mouser]
+      .some((value) => value && String(value).toLowerCase() === needle));
+    return mcpResult({ identifier, found: components.length, components: components.map(mcpPartRecord) });
+  });
+
+  server.registerResource("inventory-summary", "reelkeeper://inventory/summary", {
+    title: "ReelKeeper inventory summary",
+    description: "Current read-only inventory totals by category",
+    mimeType: "application/json"
+  }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(inventorySummary(readStore()), null, 2) }] }));
+
+  return server;
 }
 
 function writeStore(store) {
@@ -1656,6 +1755,26 @@ if (selectedFeeders == null || selectedFeeders.size() === 0) {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, name: "ReelKeeper", time: now() });
+});
+
+app.post("/mcp", async (req, res) => {
+  const server = createInventoryMcpServer();
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  res.on("close", () => {
+    transport.close();
+    server.close();
+  });
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (error) {
+    console.error("MCP request failed:", error);
+    if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
+  }
+});
+
+app.get("/mcp", (_req, res) => {
+  res.status(405).json({ error: "Use an MCP client with Streamable HTTP to connect to this endpoint" });
 });
 
 app.get("/api/export/openpnp/parts.xml", (_req, res) => {

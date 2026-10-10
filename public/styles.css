@@ -979,6 +979,41 @@ img.component-thumb:hover {
   overflow-wrap: anywhere;
 }
 
+.mcp-setup-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.mcp-read-only-badge {
+  color: #075b4c;
+  background: #d9f4ec;
+  border-color: #90d8c8;
+  flex: 0 0 auto;
+}
+
+.setup-steps {
+  margin: 0.75rem 0 1rem;
+  padding-left: 1.4rem;
+  color: var(--muted);
+}
+
+.setup-steps li + li { margin-top: 0.45rem; }
+
+.mcp-tool-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.7rem 1rem;
+  margin: 0;
+}
+
+.mcp-tool-list dt,
+.mcp-tool-list dd { margin: 0; }
+.mcp-tool-list dd { color: var(--muted); }
+
+.mcp-network-warning { border-color: #d9a441; }
+
 #openpnp-packages .openpnp-export-actions button {
   white-space: nowrap;
 }
@@ -1836,6 +1871,9 @@ dialog h3 {
   }
 
   .switch-control { align-self: flex-start; }
+
+  .mcp-setup-hero { align-items: flex-start; }
+  .mcp-tool-list { grid-template-columns: 1fr; }
 
   .script-download-row {
     align-items: flex-start;

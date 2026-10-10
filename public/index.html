@@ -356,6 +356,7 @@ Content-Type: application/json
           <div class="settings-tabs" role="tablist" aria-label="Settings sections">
             <button class="settings-tab active" data-settings-panel="general">General</button>
             <button class="settings-tab" data-settings-panel="api">API</button>
+            <button class="settings-tab" data-settings-panel="mcp">AI / MCP</button>
             <button class="settings-tab" data-settings-panel="history">Order Import History</button>
             <button class="settings-tab" data-settings-panel="audit">Audit Log</button>
           </div>
@@ -433,6 +434,55 @@ Content-Type: application/json
                 <h3>API Reference</h3>
                 <button id="refreshDocsBtn">Refresh docs</button>
                 <pre id="apiDocs"><code>Loading...</code></pre>
+              </div>
+            </div>
+          </div>
+          <div class="settings-panel" id="settings-mcp">
+            <div class="settings-grid">
+              <div class="panel mcp-setup-hero">
+                <div>
+                  <h3>Read-only AI inventory access</h3>
+                  <p class="hint">Connect an MCP-compatible AI client directly to ReelKeeper. It can inspect quantities and component data, but the MCP server has no tools for adding, editing, deleting, importing, or consuming parts.</p>
+                </div>
+                <span class="pill mcp-read-only-badge">Read only</span>
+              </div>
+              <div class="panel">
+                <h3>Connection</h3>
+                <dl class="api-connection-details">
+                  <dt>Transport</dt>
+                  <dd>Streamable HTTP</dd>
+                  <dt>Server URL</dt>
+                  <dd><code id="mcpServerUrl"></code></dd>
+                  <dt>Authentication</dt>
+                  <dd>None</dd>
+                </dl>
+                <button id="copyMcpUrlBtn">Copy server URL</button>
+              </div>
+              <div class="panel">
+                <h3>Client setup</h3>
+                <ol class="setup-steps">
+                  <li>Open the MCP or integrations settings in your AI client.</li>
+                  <li>Add a remote MCP server using the Streamable HTTP transport.</li>
+                  <li>Use the ReelKeeper server URL shown above. No headers or API key are required.</li>
+                  <li>Connect, then confirm the client shows the three read-only tools listed below.</li>
+                </ol>
+                <pre><code id="mcpConfigExample"></code></pre>
+                <button id="copyMcpConfigBtn">Copy JSON example</button>
+              </div>
+              <div class="panel">
+                <h3>Available tools</h3>
+                <dl class="mcp-tool-list">
+                  <dt><code>inventory_summary</code></dt>
+                  <dd>Inventory totals and category counts.</dd>
+                  <dt><code>search_components</code></dt>
+                  <dd>Search and filter complete component records, including quantities, packaging, supplier numbers, pricing, photos, datasheets, footprints, and heights.</dd>
+                  <dt><code>get_component</code></dt>
+                  <dd>Look up exact records using an internal id, LCSC number, MPN, or Mouser number.</dd>
+                </dl>
+              </div>
+              <div class="panel mcp-network-warning">
+                <h3>Network access</h3>
+                <p class="hint">This endpoint intentionally has no authentication. Anyone who can reach ReelKeeper can read the inventory through MCP. Keep it on a trusted LAN or private VPN and do not expose <code>/mcp</code> directly to the public internet.</p>
               </div>
             </div>
           </div>

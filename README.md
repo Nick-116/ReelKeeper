@@ -21,6 +21,7 @@ ReelKeeper is a self hosted inventory management software for PCB components. I 
 - Use the authenticated AI Part Review API to review only components missing verified heights and submit evidence-backed results without embedding AI in ReelKeeper.
 - Upload a board BOM and export an OpenPnP assignment script that connects every designator to an existing library part by LCSC number, with an exact manufacturer-part-number fallback. When an exact match is unavailable, the script prompts you to choose a part already in OpenPnP or skip that BOM line.
 - Download OpenPnP utility scripts, including a selected-feeder tool that applies one prompted pick Z height without changing unselected feeders.
+- Connect MCP-compatible AI clients to a read-only Streamable HTTP endpoint for inventory summaries, component search, and exact supplier-part lookup.
 - Undo order imports, review inventory activity in the audit log, and reset the installation from Settings.
 - Full API: I added this so I could have my pick and place automatically adjust my database every time it places a component. If you are interested in the scripts for that send me a message! It is all documented in the settings>API page.
 
@@ -70,6 +71,7 @@ Inventory data is stored at `data/reelkeeper.json` through the mounted volume.
 - `GET /api/export/openpnp/parts.xml`
 - `GET /api/export/openpnp/packages.xml`
 - `GET /api/export/openpnp/import-script.js`
+- `POST /mcp` (read-only MCP over Streamable HTTP; no authentication)
 - `GET /api/export/openpnp/scripts/set-selected-feeder-pick-z.js`
 - `POST /api/export/openpnp/bom-assignment-script`
 - `POST /api/openpnp/footprints/fetch`
